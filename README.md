@@ -1,0 +1,2 @@
+# OmniBrowse
+Autonomous browsing agent.
