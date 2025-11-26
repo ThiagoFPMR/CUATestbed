@@ -58,11 +58,10 @@ def load_trainer_from_file(args_path: str) -> callable:
         Args:
             **kwargs: Additional keyword arguments to pass to the trainer constructor.
         """
-        config_module = importlib.import_module(trainer_config["config_type"].rsplit(".", 1)[0])
-        config_class = getattr(config_module, trainer_config["config_type"].rsplit(".", 1)[1])
+        trl_module = importlib.import_module("trl")
 
-        trainer_module = importlib.import_module(trainer_config["trainer_type"].rsplit(".", 1)[0])
-        trainer_class = getattr(trainer_module, trainer_config["trainer_type"].rsplit(".", 1)[1])
+        config_class = getattr(trl_module, trainer_config["config_type"])
+        trainer_class = getattr(trl_module, trainer_config["trainer_type"])
 
         del trainer_config["config_type"]
         del trainer_config["trainer_type"]

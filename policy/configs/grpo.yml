@@ -1,6 +1,6 @@
 # Trainer configuration for GRPO training
-config_type: "trl.GRPOConfig"
-trainer_type: "trl.GRPOTrainer"
+config_type: "GRPOConfig"
+trainer_type: "GRPOTrainer"
 
 # Training hyperparameters
 learning_rate: 5e-6
