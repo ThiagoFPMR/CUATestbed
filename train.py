@@ -2,14 +2,14 @@
 General training script for vision-language models using reinforcement learning.
 """
 
+from safetensors import safe_open
+from trl import GRPOConfig, GRPOTrainer
+
 from policy.rewards import *
 from model.load_model import load_model_from_file
 from policy.load_train_args import load_args_from_file
 
 from dataset.math_vista import load_math_vista
-
-from safetensors import safe_open
-from trl import GRPOConfig, GRPOTrainer
 
 model, tokenizer = load_model_from_file("qwen3-vl-8b-4bit.yml")
 
