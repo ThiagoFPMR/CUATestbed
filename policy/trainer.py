@@ -3,7 +3,6 @@ Module to load training configuration for optimizer and training arguments.
 """
 
 import os
-import trl
 import yaml
 import importlib
 from transformers import Trainer, TrainingArguments
