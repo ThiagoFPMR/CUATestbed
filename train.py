@@ -14,6 +14,7 @@ from dataset.math_vista import load_math_vista
 model, tokenizer = load_model_from_file("qwen3-vl-8b-4bit.yml")
 
 train_dataset = load_math_vista(tokenizer)
+
 trainer = load_trainer_from_file("grpo.yml")(
     model = model,
     reward_funcs = [
@@ -23,7 +24,6 @@ trainer = load_trainer_from_file("grpo.yml")(
     processing_class = tokenizer,
     train_dataset = train_dataset,
 )
-
 trainer.train()
 
 model.save_pretrained("grpo_lora")  # Local saving
