@@ -1,0 +1,1 @@
+from math_vista import load_math_vista
