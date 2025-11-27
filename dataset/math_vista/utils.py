@@ -1,3 +1,13 @@
+"""
+Utility functions for MathVista dataset processing.
+"""
+
+# Define the delimiter variables for clarity and easy modification
+REASONING_START = "<REASONING>"
+REASONING_END = "</REASONING>"
+SOLUTION_START = "<SOLUTION>"
+SOLUTION_END = "</SOLUTION>"
+
 def resize_images(example):
     image = example["decoded_image"]
     image = image.resize((512, 512))
@@ -11,13 +21,6 @@ def convert_to_rgb(example):
         image = image.convert("RGB")
     example["decoded_image"] = image
     return example
-
-
-# Define the delimiter variables for clarity and easy modification
-REASONING_START = "<REASONING>"
-REASONING_END = "</REASONING>"
-SOLUTION_START = "<SOLUTION>"
-SOLUTION_END = "</SOLUTION>"
 
 def make_conversation(example):
     # Define placeholder constants if they are not defined globally

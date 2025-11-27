@@ -1,6 +1,11 @@
 # Reward functions
 import re
 
+REASONING_START = "<REASONING>"
+REASONING_END = "</REASONING>"
+SOLUTION_START = "<SOLUTION>"
+SOLUTION_END = "</SOLUTION>"
+
 def formatting_reward_func(completions,**kwargs):
     thinking_pattern = f'{REASONING_START}(.*?){REASONING_END}'
     answer_pattern = f'{SOLUTION_START}(.*?){SOLUTION_END}'
