@@ -64,8 +64,8 @@ def train_vlm_rl(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a vision-language model using reinforcement learning. Output directory is specified in the trainer config.")
     parser.add_argument("--experiment_name", type=str, required=False, default="vlm_rl_experiment", help="Name of the training experiment.")
-    parser.add_argument("--model_config", type=str, required=False, default="qwen3-vl-8b-4bit.yml", help="Path to the model configuration file.")
-    parser.add_argument("--trainer_config", type=str, required=False, default="grpo.yml", help="Path to the trainer configuration file.")
+    parser.add_argument("--model_config", type=str, required=False, default="qwen3-vl-2b-4bit.yml", help="Path to the model configuration file.")
+    parser.add_argument("--trainer_config", type=str, required=False, default="gspo.yml", help="Path to the trainer configuration file.")
     parser.add_argument("--rewards", type=str, nargs="+", required=False, default=["formatting", "correctness"], help="List of reward function names.")
     args = parser.parse_args()
 
