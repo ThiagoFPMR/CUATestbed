@@ -1,1 +1,1 @@
-from math_vista import *
+from .math_vista import *

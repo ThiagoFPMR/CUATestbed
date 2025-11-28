@@ -1,1 +1,1 @@
-from parse_rewards import *
+from .parse_rewards import *

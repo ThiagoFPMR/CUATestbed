@@ -3,11 +3,12 @@ Load and preprocess the MathVista dataset.
 """
 
 from unsloth import FastVisionModel
-from datasets import load_dataset
+from transformers import PreTrainedTokenizerBase
+from datasets import Dataset, load_dataset
 from .utils import resize_images, convert_to_rgb, make_conversation, is_numeric_answer
 
 
-def load_math_vista(tokenizer: FastVisionModel.Tokenizer):
+def load_math_vista(tokenizer: PreTrainedTokenizerBase) -> Dataset:
     """
     Load and preprocess the MathVista dataset for training.
     """

@@ -1,1 +1,1 @@
-from load_model import *
+from .load_model import load_model_from_file

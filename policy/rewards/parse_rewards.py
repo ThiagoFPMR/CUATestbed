@@ -2,10 +2,11 @@
 Module for parsing reward function names into their corresponding RewardFunction instances.
 """
 
-import rewards
+from . import rewards
+from typing import Callable
 
 
-def parse_rewards(reward_names: list[str]) -> list[function]:
+def parse_rewards(reward_names: list[str]) -> list[Callable]:
     """
     Parse a list of reward function names into their corresponding RewardFunction instances.
 
@@ -13,7 +14,7 @@ def parse_rewards(reward_names: list[str]) -> list[function]:
         reward_names (list[str]): List of reward function names as strings.
 
     Returns:
-        list[function]: List of instantiated reward functions.
+        list[Callable]: List of instantiated reward functions.
     """
     reward_funcs = []
     for reward_name in reward_names:

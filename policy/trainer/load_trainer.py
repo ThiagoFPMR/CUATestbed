@@ -5,6 +5,7 @@ Module to load training configuration for optimizer and training arguments.
 import os
 import trl
 import yaml
+from typing import Callable
 from transformers import Trainer, TrainingArguments
 
 
@@ -31,7 +32,7 @@ def load_args(config_obj: TrainingArguments, train_args: dict) -> TrainingArgume
 
     return training_args
 
-def load_trainer_from_file(args_path: str) -> callable:
+def load_trainer_from_file(args_path: str) -> Callable:
     """
     Load trainer configuration from a YAML file and return a trainer loader function.
 
@@ -39,7 +40,7 @@ def load_trainer_from_file(args_path: str) -> callable:
         args_path (str): Path to the YAML file containing trainer configuration.
 
     Returns:
-        callable: A function that loads and returns the trainer instance when called.
+        Callable: A function that loads and returns the trainer instance when called.
     """
     
     # Use the config file path relative to this script if no path is provided

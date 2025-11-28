@@ -1,14 +1,15 @@
 """
 Module to load a FastVisionModel and its tokenizer based on a configuration file.
 """
-
-import os
-import yaml
-from peft import TaskType
+import unsloth
 from unsloth import FastVisionModel
+from transformers import PreTrainedTokenizerBase
+from peft import TaskType
+import yaml
+import os
 
 
-def load_model_from_config(model_config: dict) -> tuple[FastVisionModel, FastVisionModel.Tokenizer]:
+def load_model_from_config(model_config: dict) -> tuple[FastVisionModel, PreTrainedTokenizerBase]:
     """Load the model and tokenizer based on the provided configuration."""
 
     quantization_config = model_config["quantization"]
@@ -64,7 +65,7 @@ def load_model_from_config(model_config: dict) -> tuple[FastVisionModel, FastVis
 
     return model, tokenizer
 
-def load_model_from_file(config_path: str) -> tuple[FastVisionModel, FastVisionModel.Tokenizer]:
+def load_model_from_file(config_path: str) -> tuple[FastVisionModel, object]:
     """Load the model and tokenizer based on the provided configuration file path."""
     
     # Use the config file path relative to this script if no path is provided

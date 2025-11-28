@@ -1,1 +1,1 @@
-from load_trainer import *
+from .load_trainer import load_trainer_from_file
