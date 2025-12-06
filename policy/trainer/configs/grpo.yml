@@ -8,8 +8,8 @@ adam_beta1: 0.9
 adam_beta2: 0.99
 weight_decay: 0.01
 warmup_ratio: 0.1
-lr_scheduler: "cosine"
-optimizer: "adamw_8bit"
+lr_scheduler_type: "cosine"
+optim: "adamw_8bit"
 logging_steps: 1
 log_completions: false
 per_device_train_batch_size: 1

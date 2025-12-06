@@ -44,23 +44,14 @@ def load_model_from_config(model_config: dict) -> tuple[FastVisionModel, PreTrai
         task_type = TaskType.QUESTION_ANS
     elif task_type == "feature_extraction":
         task_type = TaskType.FEATURE_EXTRACTION
+    finetuning_config["task_type"] = task_type
+
+    if finetuning_config["loftq_config"]["loftq_iter"] == 0:
+        del finetuning_config["loftq_config"]
 
     model = FastVisionModel.get_peft_model(
         model,
-        finetune_vision_layers     = finetuning_config["finetune_vision_layers"], # False if not finetuning vision layers
-        finetune_language_layers   = finetuning_config["finetune_language_layers"],  # False if not finetuning language layers
-        finetune_attention_modules = finetuning_config["finetune_attention_modules"],  # False if not finetuning attention layers
-        finetune_mlp_modules       = finetuning_config["finetune_mlp_modules"],  # False if not finetuning MLP layers
-
-        r = finetuning_config["r"],           # The larger, the higher the accuracy, but might overfit
-        lora_alpha = finetuning_config["lora_alpha"],  # Recommended alpha == r at least
-        lora_dropout = finetuning_config["lora_dropout"],
-        bias = finetuning_config["bias"],
-        random_state = finetuning_config["random_state"],
-        use_rslora = finetuning_config["use_rslora"],  # We support rank stabilized LoRA
-        loftq_config = finetuning_config["loftq"], # And LoftQ
-        use_gradient_checkpointing = finetuning_config["grad_checkpointing"], # Reduces memory usage
-        # target_modules = "all-linear", # Optional now! Can specify a list if needed
+        **finetuning_config
     )
 
     return model, tokenizer

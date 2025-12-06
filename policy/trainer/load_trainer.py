@@ -20,12 +20,7 @@ def load_args(config_obj: TrainingArguments, train_args: dict) -> TrainingArgume
     Returns:
         TrainingArguments: An instance of TrainingArguments populated with the provided configuration.
     """
-
-    train_args["optim"] = train_args["optimizer"]
-    train_args["lr_scheduler_type"] = train_args["lr_scheduler"]
-    del train_args["lr_scheduler"]
-    del train_args["optimizer"]
-
+    train_args['learning_rate'] = float(train_args['learning_rate'])
     training_args = config_obj(
         **train_args
     )

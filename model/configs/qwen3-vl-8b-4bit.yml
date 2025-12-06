@@ -22,6 +22,8 @@ finetuning:
   bias: "none"
   random_state: 3407
   use_rslora: false
-  loftq: false
+  loftq_config: # Not to be used with quantized models, only full precision
+    loftq_bits: 4
+    loftq_iter: 0 # When 0, no LoFT-Q is applied
   task_type: "causal_lm" # causal_lm, seq2seq_lm, seq_cls, token_cls, question_ans, feature_extraction
-  grad_checkpointing: "unsloth"
+  use_gradient_checkpointing: "unsloth"
