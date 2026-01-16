@@ -10,10 +10,11 @@ from model import load_model_from_file
 from policy.rewards import parse_rewards
 from policy.trainer import load_trainer_from_file
 
-from dataset.math_vista import load_math_vista
+from dataset import load_gui_r1
 
 
 def train_vlm_rl(
+        base_prompt: str,
         experiment_name: str, 
         model_config: str, 
         trainer_config: str,
@@ -31,7 +32,10 @@ def train_vlm_rl(
 
     model, tokenizer = load_model_from_file(model_config)
 
-    train_dataset = load_math_vista(tokenizer)
+    train_dataset = load_gui_r1(
+        base_prompt,
+        tokenizer
+    )
 
     trainer = load_trainer_from_file(trainer_config)(
         model = model,
@@ -48,7 +52,13 @@ def train_vlm_rl(
     print(f"📁 Model and tokenizer saved to {experiment_name}!")
 
     # Save copies of the config files used to output directory
-    save_training_params(experiment_name, model_config, trainer_config, rewards)
+    save_training_params(
+        base_prompt,
+        experiment_name, 
+        model_config, 
+        trainer_config, 
+        rewards
+    )
     print("💾 Saved copies of config files.")
 
     # Verify that the LoRA model was saved correctly    

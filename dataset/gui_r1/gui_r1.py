@@ -3,6 +3,7 @@ GUI-R1 Dataset Loader and Preprocessor
 This module provides functions to load and preprocess the GUI-R1 dataset for multi-modal tasks.
 """
 
+from transformers import PreTrainedTokenizerBase
 from datasets import load_dataset, Image
 
 
@@ -39,6 +40,7 @@ def make_conversation(
 
 def load_gui_r1(
         base_prompt: str,
+        # tokenizer: PreTrainedTokenizerBase,
         split: str = "train", 
         resize_to: tuple = None,  
         key_pairs: dict = {"[INSTRUCT]": "instruction"},
@@ -69,6 +71,17 @@ def load_gui_r1(
         return make_conversation(example, base_prompt, key_pairs)
 
     dataset = dataset.map(preprocess_example)
+    
+    # dataset = dataset.map(
+    #     lambda example: {
+    #         "prompt": tokenizer.apply_chat_template(
+    #             example["prompt"],
+    #             tokenize = False,
+    #             add_generation_prompt = True, # Must add assistant
+    #         )
+    #     }
+    # )
+
     return dataset
 
 
@@ -79,9 +92,12 @@ if __name__ == "__main__":
         "followed by your final answer between <SOLUTION> and </SOLUTION>."
     )
 
-    dataset = load_gui_r1(base_prompt=BASE_PROMPT, split="train")
+    dataset = load_gui_r1(base_prompt=BASE_PROMPT, split="test")
 
     print("Dataset ready. Fetching first example...")
 
-    first_example = next(iter(dataset))
+    for i in range(10):
+        example = next(iter(dataset))
+        print(f"Example {i+1}:")
+        print("GT Action:", example["gt_action"])
     import pdb; pdb.set_trace()

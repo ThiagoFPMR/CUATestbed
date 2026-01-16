@@ -8,6 +8,7 @@ import shutil
 
 
 def save_training_params(
+        base_prompt: str,
         experiment_name: str, 
         model_config: str, 
         trainer_config: str,

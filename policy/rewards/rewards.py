@@ -1,10 +1,30 @@
 # Reward functions
 import re
 
-REASONING_START = "<REASONING>"
-REASONING_END = "</REASONING>"
-SOLUTION_START = "<SOLUTION>"
-SOLUTION_END = "</SOLUTION>"
+def gui_r1_formatting_reward_func(completions, **kwargs):
+    """
+    Reward function to evaluate the formatting of model completions
+    based on the presence of reasoning and solution tags.
+
+    Process should be as follows:
+    <think>...</think>
+    <answer>
+        [
+            'action': enum[...], 
+            'point': [x,y],
+            'input_text': 'no input text [default]'
+        ]
+    </answer>
+
+    Args:
+        completions (list of str): List of model-generated completions.
+    
+    Returns:
+        list of float: Reward scores for each completion.
+    """
+    target_format = re.compile(r"<think>.*?</think>\s*<answer>.*?</answer>", re.DOTALL)
+    contents = [completion[0]["content"] for completion in completions]
+
 
 def formatting_reward_func(completions,**kwargs):
     thinking_pattern = f'{REASONING_START}(.*?){REASONING_END}'
