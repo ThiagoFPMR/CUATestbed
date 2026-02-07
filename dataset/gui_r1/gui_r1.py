@@ -40,7 +40,7 @@ def make_conversation(
 
 def load_gui_r1(
         base_prompt: str,
-        # tokenizer: PreTrainedTokenizerBase,
+        tokenizer: PreTrainedTokenizerBase,
         split: str = "train", 
         resize_to: tuple = None,  
         key_pairs: dict = {"[INSTRUCT]": "instruction"},
@@ -72,15 +72,15 @@ def load_gui_r1(
 
     dataset = dataset.map(preprocess_example)
     
-    # dataset = dataset.map(
-    #     lambda example: {
-    #         "prompt": tokenizer.apply_chat_template(
-    #             example["prompt"],
-    #             tokenize = False,
-    #             add_generation_prompt = True, # Must add assistant
-    #         )
-    #     }
-    # )
+    dataset = dataset.map(
+        lambda example: {
+            "prompt": tokenizer.apply_chat_template(
+                example["prompt"],
+                tokenize = False,
+                add_generation_prompt = True, # Must add assistant
+            )
+        }
+    )
 
     return dataset
 

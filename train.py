@@ -37,12 +37,16 @@ def train_vlm_rl(
         tokenizer
     )
 
+    import pdb; pdb.set_trace()
+
     trainer = load_trainer_from_file(trainer_config)(
         model = model,
         reward_funcs = parse_rewards(rewards),
         processing_class = tokenizer,
         train_dataset = train_dataset,
     )
+
+    import pdb; pdb.set_trace()
     trainer.train()
     print("🏁 Training completed successfully!")
 
@@ -76,7 +80,20 @@ if __name__ == "__main__":
     parser.add_argument("--experiment_name", type=str, required=False, default="vlm_rl_experiment", help="Name of the training experiment.")
     parser.add_argument("--model_config", type=str, required=False, default="qwen3-vl-2b-4bit.yml", help="Path to the model configuration file.")
     parser.add_argument("--trainer_config", type=str, required=False, default="gspo.yml", help="Path to the trainer configuration file.")
-    parser.add_argument("--rewards", type=str, nargs="+", required=False, default=["formatting", "correctness"], help="List of reward function names.")
+    parser.add_argument("--rewards", type=str, nargs="+", required=False, default=["gui_r1"], help="List of reward function names.")
     args = parser.parse_args()
 
-    train_vlm_rl(args.experiment_name, args.model_config, args.trainer_config, args.rewards)
+    # GUI-R1 base prompt
+    base_prompt = (
+        f"You are GUI-R1, a reasoning GUI Agent Assistant. In this UI screenshot <image>, I want you to continue executing the command '[INSTRUCT]', with the action history being '[HISTORY]'.\n"
+            "Please provide the action to perform (enumerate from ['wait', 'long_press', 'click', 'press_back', 'type', 'open_app', 'scroll']), the point where the cursor is moved to (integer) if a click is performed, and any input text required to complete the action.\n"
+            "Output the thinking process in <think> </think> tags, and the final answer in <answer> </answer> tags as follows:\n"
+            "<think> ... </think> <answer>[{'action': enum['wait', 'long_press', 'click', 'press_back', 'type', 'open_app', 'scroll'], 'point': [x, y], 'input_text': 'no input text [default]'}]</answer>\n"
+            "Note:\n specific input text (no default) is necessary for actions enum['type', 'open_app', 'scroll'] \n Example:\n"
+            "[{'action': enum['wait', 'press_back'], 'point': [-100, -100], 'input_text': 'no input text'}]\n"
+            "[{'action': enum['click', 'long_press'], 'point': [123, 300], 'input_text': 'no input text'}]\n"
+            "[{'action': enum['type', 'open_app'], 'point': [-100, -100], 'input_text': 'shanghai shopping mall'}]\n"
+            "[{'action': enum['scroll'], 'point': [-100, -100], 'input_text': enum['up', 'left', 'right', 'down']}]"
+    )
+
+    train_vlm_rl(base_prompt, args.experiment_name, args.model_config, args.trainer_config, args.rewards)
