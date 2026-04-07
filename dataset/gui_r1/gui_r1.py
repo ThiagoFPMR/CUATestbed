@@ -1,103 +1,80 @@
-"""
-GUI-R1 Dataset Loader and Preprocessor
-This module provides functions to load and preprocess the GUI-R1 dataset for multi-modal tasks.
-"""
+import os
+from datasets import load_from_disk
 
-from transformers import PreTrainedTokenizerBase
-from datasets import load_dataset, Image
-
-
-def make_conversation(
-        example: dict, 
-        base_prompt: str, 
-        key_pairs: dict = {"[INSTRUCT]": "instruction"}
-    ) -> dict:
+def format_for_vlm(example, base_prompt):
     """
-    Construct a multi-modal conversation prompt for the GUI-R1 dataset.
+    Formats the baked row into a chat-template compatible structure.
+    Adjusted to match your new schema (instruction, history, etc.)
     """
-    # The user's text prompt
-    for key, value in key_pairs.items():
-        text_content = base_prompt.replace(key, example[value])
+    # Build the text content using the instruction and history if available
+    # You can customize this logic based on your specific planning strategy
+    text_content = base_prompt.replace("[INSTRUCT]", example["instruction"])
+    
+    if example["history"] and example["history"] != "None":
+        text_content = f"History: {example['history']}\n\n{text_content}"
 
-    # Construct the prompt in the desired multi-modal format
-    prompt = [
+    # Construct the standard multi-modal message format
+    messages = [
         {
             "role": "user",
             "content": [
-                {"type": "image"},  # Placeholder for the image
-                {"type": "text", "text": text_content},  # The text part of the prompt
+                {"type": "image"}, # The VLM will swap this for the image tensor
+                {"type": "text", "text": text_content},
             ],
         },
     ]
 
     return {
-        "prompt": prompt, 
-        "image": example["image"], 
-        "gt_action": example["gt_action"], 
-        "gt_bbox": example["gt_bbox"], 
-        "gt_input_text": example["gt_input_text"]
+        "messages": messages,
+        "image": example["image"], # This is loaded lazily from disk
+        "label": example["gt_action"],
+        "bbox": example["gt_bbox"]
     }
 
-def load_gui_r1(
-        base_prompt: str,
-        tokenizer: PreTrainedTokenizerBase,
-        split: str = "train", 
-        resize_to: tuple = None,  
-        key_pairs: dict = {"[INSTRUCT]": "instruction"},
-        streaming: bool = True
-    ) -> load_dataset:
+def get_baked_gui_dataset(path="./data/gui_r1_raw_test", base_prompt="[INSTRUCT]"):
     """
-    Load and preprocess the GUI-R1 dataset for multi-modal tasks.
-
-    Args:
-        base_prompt (str): Base prompt template with placeholders for dynamic content.
-        split (str, optional): Dataset split to load. Defaults to "train".
-        resize_to (tuple, optional): Desired size to resize images to. Defaults to None.
-        key_pairs (dict, optional): Mapping of placeholders to example keys. Defaults to {"[INSTRUCT]": "instruction"}.
-        streaming (bool, optional): Whether to load the dataset in streaming mode. Defaults to True.
-        
-    Returns:
-        load_dataset: The preprocessed GUI-R1 dataset.
+    Loads the memory-mapped dataset and prepares it for use.
     """
-    dataset = load_dataset("ritzzai/GUI-R1", streaming=streaming, split=split)
-    
-    dataset = dataset.cast_column("image", Image())
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Baked data not found at {path}. Run prepare.py first!")
 
-    def preprocess_example(example):
-        if resize_to is None:
-            return make_conversation(example, base_prompt, key_pairs)
-        
-        example["image"] = example["image"].resize(resize_to)
-        return make_conversation(example, base_prompt, key_pairs)
-
-    dataset = dataset.map(preprocess_example)
+    # 1. Load from disk (Instant, ~0 RAM overhead)
+    dataset = load_from_disk(path)
     
-    dataset = dataset.map(
-        lambda example: {
-            "prompt": tokenizer.apply_chat_template(
-                example["prompt"],
-                tokenize = False,
-                add_generation_prompt = True, # Must add assistant
-            )
-        }
+    print(f"Dataset loaded. Total examples: {len(dataset)}")
+
+    # 2. Apply formatting
+    # We use .map() but since the dataset is local, it's very fast.
+    # For inference testing, you might not even need .map(), you could just 
+    # format on-the-fly to save even more memory.
+    formatted_dataset = dataset.map(
+        lambda x: format_for_vlm(x, base_prompt),
+        remove_columns=dataset.column_names # Clean up raw columns
     )
 
-    return dataset
-
+    return formatted_dataset
 
 if __name__ == "__main__":
-    BASE_PROMPT = (
-        "[INSTRUCT]\n"
-        "Please provide detailed reasoning between <REASONING> and </REASONING>, "
-        "followed by your final answer between <SOLUTION> and </SOLUTION>."
+    # Test it out
+    PROMPT_TEMPLATE = (
+        "You are a GUI agent. Goal: [INSTRUCT]\n"
+        "Provide your reasoning in <REASONING> tags and action in <SOLUTION> tags."
     )
+    
+    DATA_PATH = "./data/gui_r1_raw_test"
+    
+    print("Initializing baked dataset...")
+    ds = get_baked_gui_dataset(DATA_PATH, PROMPT_TEMPLATE)
 
-    dataset = load_gui_r1(base_prompt=BASE_PROMPT, split="test")
-
-    print("Dataset ready. Fetching first example...")
-
-    for i in range(10):
-        example = next(iter(dataset))
-        print(f"Example {i+1}:")
-        print("GT Action:", example["gt_action"])
-    import pdb; pdb.set_trace()
+    # Test random access (impossible with streaming, instant with baking!)
+    print("\nAccessing example #42...")
+    sample = ds[42]
+    
+    print(f"Action: {sample['label']}")
+    print(f"BBox: {sample['bbox']}")
+    print(f"Instruction: {sample['messages'][0]['content'][1]['text'][:100]}...")
+    
+    # Check image
+    img = sample['image']
+    print(f"Image mode: {img.mode}, Size: {img.size}")
+    # img.show() # Uncomment to see the screenshot

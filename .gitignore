@@ -1,5 +1,10 @@
 #Unsloth
 unsloth_compiled_cache/
+AgentNet_Raw/
+gui_r1_raw_test/
+gui_r1_prepped_test/
+baked_gui_r1/
+cache/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
