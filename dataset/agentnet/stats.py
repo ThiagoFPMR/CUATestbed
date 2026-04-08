@@ -173,7 +173,19 @@ def track_example_props(example, stats):
     Tracks the presence of the many keys in the examples, counting how often they appear.
     (Some keys are optional or missing in some examples, so this helps us understand the data better.)
     """
-    keys_to_track = ['task_id', 'instruction', 'task_completed', 'alignment_score', 'efficiency_score', 'task_difficulty', 'reason', 'natural_language_task', 'actual_task', 'traj', 'domain']
+    keys_to_track = [
+        'task_id', 
+        'instruction', 
+        'task_completed', 
+        'alignment_score', 
+        'efficiency_score', 
+        'task_difficulty', 
+        'reason', 
+        'natural_language_task', 
+        'actual_task', 
+        'traj', 
+        'domain'
+    ]
     for key in keys_to_track:
         if key not in stats:
             stats[key] = 0
