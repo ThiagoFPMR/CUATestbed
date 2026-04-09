@@ -121,7 +121,7 @@ def count_completed_tasks(example, stats):
         stats["total_completed_examples"] += 1
     elif example.get("domain", "") != "infeasible" and example.get("alignment_score", 0) >= 7:
         stats["incomplete_w_alignment_gt_7"] += 1
-        import pdb; pdb.set_trace()
+        # import pdb; pdb.set_trace()
     elif example.get("domain", "") != "infeasible" and example.get("alignment_score", 10) < 7:
         stats["incomplete_w_alignment_lt_7"] += 1
 
@@ -156,6 +156,7 @@ def track_action_types(example, stats):
     if "action_type_counts" not in stats:
         stats["action_type_counts"] = {}
         stats["action_types"] = set()
+        stats["action_arguments"] = {}
 
     trajectories = example.get("traj", [])
     for traj in trajectories:
@@ -167,6 +168,12 @@ def track_action_types(example, stats):
             action_name = "does not follow expected format"
         stats["action_type_counts"][action_name] = stats["action_type_counts"].get(action_name, 0) + 1
         stats["action_types"].add(action_name)
+
+        if action_name not in stats["action_arguments"]:
+            stats["action_arguments"][action_name] = set()
+
+        args = code.split("(")[1].replace(")", "") if "(" in code else ""
+        stats["action_arguments"][action_name].add(args)
 
 def track_example_props(example, stats):
     """
@@ -249,7 +256,7 @@ def profile_dataset(jsonl_files: list[str], analysis_funcs: list[callable]) -> d
     return stats
 
 if __name__ == "__main__":
-    DATASET_DIR = "AgentNet_Raw"
+    DATASET_DIR = "data"
     # Dynamically build the paths using the DATASET_DIR variable
     sources = [
         os.path.join(DATASET_DIR, "agentnet_ubuntu_5k.jsonl"), 

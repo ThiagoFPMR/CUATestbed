@@ -199,6 +199,8 @@ def load_batch_images(batch: dict) -> dict:
                         print(f"Error loading image {item['image']}: {e}")
                         continue
                 else:
+                    if "image" in item:
+                        del item["image"]
                     new_content.append(item)
             new_conversation.append({"role": message["role"], "content": new_content})
         new_batch.append(new_conversation)
