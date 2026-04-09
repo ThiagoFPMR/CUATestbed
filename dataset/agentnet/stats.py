@@ -162,18 +162,125 @@ def track_action_types(example, stats):
     for traj in trajectories:
         code = traj.get("value", {}).get("code", "not found") 
         # code should follow a format like "pyautogui.action(args)", we can extract the action name
-        try:
-            action_name = code.split(".")[1].split("(")[0] if "." in code else "not found"
-        except:
-            action_name = "does not follow expected format"
-        stats["action_type_counts"][action_name] = stats["action_type_counts"].get(action_name, 0) + 1
-        stats["action_types"].add(action_name)
+        for action_code in code.split("\n"):
+            try:
+                action_name = action_code.split(".")[1].split("(")[0] if "." in action_code else "not found"
+            except:
+                action_name = "does not follow expected format"
+            stats["action_type_counts"][action_name] = stats["action_type_counts"].get(action_name, 0) + 1
+            stats["action_types"].add(action_name)
 
-        if action_name not in stats["action_arguments"]:
-            stats["action_arguments"][action_name] = set()
+            if action_name not in stats["action_arguments"]:
+                stats["action_arguments"][action_name] = set()
 
-        args = code.split("(")[1].replace(")", "") if "(" in code else ""
-        stats["action_arguments"][action_name].add(args)
+            args = action_code.split("(")[1].replace(")", "") if "(" in action_code else ""
+            stats["action_arguments"][action_name].add(args)
+
+def verify_action_formats(example, stats):
+    if "non_conforming_actions" not in stats:
+        stats["non_conforming_actions"] = {}
+    trajectories = example.get("traj", [])
+
+    def add_non_conforming(name, reason, code_str):
+        if name not in stats["non_conforming_actions"]:
+            stats["non_conforming_actions"][name] = []
+        stats["non_conforming_actions"][name].append(code_str)
+        print(f"Non-conforming {name} action code: '{code_str}' - reason: {reason}")
+
+    for traj in trajectories:
+        code = traj.get("value", {}).get("code", "not found") 
+        for action_code in code.split("\n"):
+            action_name = action_code.split(".")[1].split("(")[0] if "." in action_code else "not found"
+            action_args = action_code.split("(")[1].replace(")", "") if "(" in action_code else ""
+            if action_name == "not found":
+                print(f"Non-conforming action code: '{action_code}'")
+                continue
+            
+            # start by checking the 'click' actions
+            if action_name in ["click", "rightClick", "doubleClick",  "moveTo", "tripleClick", "middleClick"]:
+                # ensure that action args follows the format "x=number, y=number" where both numbers are in the range [0, 1]
+                if not all(arg.strip().startswith(("x=", "y=")) for arg in action_args.split(",")):
+                    add_non_conforming(action_name, "click action does not have x= and y= arguments", action_code)
+                    continue
+                try:
+                    x_arg = next(arg for arg in action_args.split(",") if arg.strip().startswith("x="))
+                    y_arg = next(arg for arg in action_args.split(",") if arg.strip().startswith("y="))
+                    x_value = float(x_arg.split("=")[1])
+                    y_value = float(y_arg.split("=")[1])
+                    if not (0 <= x_value <= 1 and 0 <= y_value <= 1):
+                        add_non_conforming(action_name, "click action has x or y argument out of range [0, 1]", action_code)
+                except Exception as e:
+                    add_non_conforming(action_name, f"error parsing click action arguments: {e}", action_code)
+            # wait action should have no arguments
+            elif action_name == "wait":
+                if action_args.strip() != "":
+                    add_non_conforming(action_name, "wait action should have no arguments", action_code)
+            # write should have (message="some text") as its argument
+            elif action_name == "write":
+                if not action_args.strip().startswith("message="):
+                    add_non_conforming(action_name, "write action should have message= argument", action_code)
+            # scroll and hscroll should have a single integer argument (e.g. scroll(5) or hscroll(-3))
+            elif action_name in ["scroll", "hscroll"]:
+                try:
+                    scroll_value = int(action_args.strip())
+                except Exception as e:
+                    add_non_conforming(action_name, f"scroll action should have a single integer argument: {e}", action_code)
+            # dragTo should have arguments "x=number, y=number" where both numbers are in the range [0, 1] and a button argument like "button='left'"
+            elif action_name == "dragTo":
+                if not all(arg.strip().startswith(("x=", "y=", "button=")) for arg in action_args.split(",")):
+                    add_non_conforming(action_name, "dragTo action does not have x=, y=, and button= arguments", action_code)
+                    continue
+                try:
+                    x_arg = next(arg for arg in action_args.split(",") if arg.strip().startswith("x="))
+                    y_arg = next(arg for arg in action_args.split(",") if arg.strip().startswith("y="))
+                    button_arg = next(arg for arg in action_args.split(",") if arg.strip().startswith("button="))
+                    x_value = float(x_arg.split("=")[1])
+                    y_value = float(y_arg.split("=")[1])
+                    button_value = button_arg.split("=")[1].strip("'\"")
+                    if not (0 <= x_value <= 1 and 0 <= y_value <= 1):
+                        add_non_conforming(action_name, "dragTo action has x or y argument out of range [0, 1]", action_code)
+                    if button_value not in ["left", "right", "middle"]:
+                        add_non_conforming(action_name, "dragTo action has invalid button argument (should be 'left', 'right', or 'middle')", action_code)
+                except Exception as e:
+                    add_non_conforming(action_name, f"error parsing dragTo action arguments: {e}", action_code)
+            # press follows ("key", presses=number) format, where the first is a string representing the key to press and the second is an integer representing how many times to press it
+            elif action_name == "press":
+                if not (action_args.strip().startswith('"') or action_args.strip().startswith("'")):
+                    add_non_conforming(action_name, "press action should have format (\"key\", [presses=number])", action_code)
+                else:
+                    try:
+                        args_list = action_args.split(",")
+                        key_part = args_list[0].strip()
+                        key_value = key_part.strip('"').strip("'")
+                        
+                        presses_part = next((arg for arg in args_list if arg.strip().startswith("presses=")), None)
+                        if presses_part is not None:
+                            presses_value = int(presses_part.split("=")[1])
+                    except Exception as e:
+                        add_non_conforming(action_name, f"error parsing press action arguments: {e}", action_code)
+            # terminate follows (status="success") where status can be "success" or "failure" or "fail"
+            elif action_name == "terminate":
+                if not action_args.strip().startswith("status="):
+                    add_non_conforming(action_name, "terminate action should have status= argument", action_code)
+                else:
+                    try:
+                        status_part = action_args.strip()
+                        status_value = status_part.split("=")[1].strip('"').strip("'")
+                        if status_value not in ["success", "failure", "fail"]:
+                            add_non_conforming(action_name, "terminate action has invalid status argument (should be 'success', 'failure', or 'fail')", action_code)
+                    except Exception as e:
+                        add_non_conforming(action_name, f"error parsing terminate action arguments: {e}", action_code)
+            #hotkey should give a list of keys to press following (["key1", "key2", ...]) format
+            elif action_name == "hotkey":
+                if not action_args.strip().startswith("[") or not action_args.strip().endswith("]"):
+                    add_non_conforming(action_name, "hotkey action should have format ([\"key1\", \"key2\", ...])", action_code)
+                else:
+                    try:
+                        keys_part = action_args.strip()[1:-1].strip()  # remove the surrounding brackets
+                        keys = [key.strip().strip('"').strip("'") for key in keys_part.split(",")]
+                    except Exception as e:
+                        add_non_conforming(action_name, f"error parsing hotkey action arguments: {e}", action_code)
+            
 
 def track_example_props(example, stats):
     """
@@ -271,6 +378,7 @@ if __name__ == "__main__":
         track_action_types,
         track_example_props,
         track_instruction_length,
+        verify_action_formats,
     ]
 
     # 1. Load all records into a single Python list
