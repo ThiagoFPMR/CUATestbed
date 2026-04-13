@@ -3,6 +3,8 @@ import os
 from PIL import Image
 from datasets import Dataset
 
+from action_utils import ACTION_PATTERNS, action_code_to_labels
+
 
 def filter_trajectory(traj: dict, alignment_thr: int = 7) -> bool:
     """
@@ -45,7 +47,8 @@ def filter_step(step_idx: int, trajectory: dict, min_instruction_len: int = 10) 
             return False
 
     # Filter for incomplete trajectories
-    action_type = steps[step_idx]["value"]["code"].split(".")[1].split("(")[0]
+    code = steps[step_idx]["value"]["code"]
+    action_type = code.split(".")[1].split("(")[0]
     if trajectory.get("task_completed", True) is False:
         # Don't add the "terminate" action
         if action_type == "terminate":
@@ -54,11 +57,45 @@ def filter_step(step_idx: int, trajectory: dict, min_instruction_len: int = 10) 
         if len(trajectory.get("instruction", "").split()) < min_instruction_len:
             return False
 
+    if not verify_action_code(code):
+        return False
+
     return True
 
-def get_action_from_step(step: dict) -> str:
+def verify_action_code(code: str) -> bool:
+    """
+    Runs the action code through a series of regex checks to ensure it conforms
+    to the expected format for each action type. 
+    
+    Args:
+        action_code (str): The action code to verify.
+    Returns:
+        bool: True if the action code is valid, False otherwise.
+    """
+    for action_code in code.split("\n"):
+        action_code = action_code.split(".")[1]
+        action_type = action_code.split("(")[0]
+        
+        pattern = ACTION_PATTERNS.get(action_type)
+
+        if not pattern:
+            return False
+        if not pattern.match(action_code):
+            return False
+
+    return True
+
+def get_actions_from_step(code: str) -> str:
     """Extract the action from a step's code."""
-    return step["value"]["code"].split(".")[1]
+    actions = "["
+    for action_code in code.split("\n"):
+        action_code = action_code.split(".")[1]
+        if action_code == "terminate(status='fail')":
+            import pdb; pdb.set_trace()
+            action_code ="terminate(status='failure')"
+        actions += f"{action_code}, "
+    actions = actions.rstrip(", ") + "]"
+    return actions
 
 def conversation_from_step(
     step_idx: int, 
@@ -99,6 +136,9 @@ def conversation_from_step(
     # Add up to `history_length` previous steps to the conversation history
     for idx in range(max(0, step_idx - history_length), step_idx):
         step = steps[idx]
+        code = step["value"]["code"]
+        if not verify_action_code(code):
+            continue
         if history_images:
             messages.append({
                 "role": "user",
@@ -110,7 +150,7 @@ def conversation_from_step(
         messages.append({
             "role": "assistant",
             "content": [
-                {"type": "text", "text": f"Step: {idx}, Action: {get_action_from_step(step)}"}
+                {"type": "text", "text": f"Step: {idx}, Action: {code.split('.')[1]}"}"}
             ]
         })
     
@@ -171,7 +211,8 @@ def load_agentnet_records(
                         history_images,
                         min_instruction_len
                     )
-                    dataset_records.append({"messages": conversation})
+                    labels = labels_from_code(steps[step_idx]["value"]["code"])
+                    dataset_records.append({"messages": conversation, "labels": labels})
 
     return dataset_records
 
@@ -185,8 +226,10 @@ def load_batch_images(batch: dict) -> dict:
         dict: The batch with images loaded as PIL Image objects.
     """
     new_batch = []
+    image_sizes = []
     for conversation in batch["messages"]:
         new_conversation = []
+        current_size = None
         for message in conversation:
             new_content = []
             for item in message["content"]:
@@ -194,6 +237,7 @@ def load_batch_images(batch: dict) -> dict:
                     try:
                         image_path = item["image"]
                         image = Image.open(image_path).convert("RGB")
+                        current_size = (image.size[1], image.size[0])  # (height, width)
                         new_content.append({"type": "image", "image": image})
                     except Exception as e:
                         print(f"Error loading image {item['image']}: {e}")
@@ -204,7 +248,8 @@ def load_batch_images(batch: dict) -> dict:
                     new_content.append(item)
             new_conversation.append({"role": message["role"], "content": new_content})
         new_batch.append(new_conversation)
-    return {"messages": new_batch}
+        image_sizes.append(current_size)
+    return {"messages": new_batch, "labels": batch["labels"], "image_sizes": image_sizes}
 
 def load_agentnet(
     system_prompt: str, 

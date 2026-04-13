@@ -1,6 +1,9 @@
-import json
 import os
 import cv2
+import json
+import seaborn as sns
+import matplotlib.pyplot as plt
+
 
 def show_trajectory(example, imgs_dir):
     """
@@ -243,19 +246,20 @@ def verify_action_formats(example, stats):
                         add_non_conforming(action_name, "dragTo action has invalid button argument (should be 'left', 'right', or 'middle')", action_code)
                 except Exception as e:
                     add_non_conforming(action_name, f"error parsing dragTo action arguments: {e}", action_code)
-            # press follows ("key", presses=number) format, where the first is a string representing the key to press and the second is an integer representing how many times to press it
+            # press follows ("key", presses=number) format, where the first is a string representing the key to press and the second is an integer representing how many times to press it, or a list of keys
             elif action_name == "press":
-                if not (action_args.strip().startswith('"') or action_args.strip().startswith("'")):
-                    add_non_conforming(action_name, "press action should have format (\"key\", [presses=number])", action_code)
+                if not (action_args.strip().startswith('"') or action_args.strip().startswith("'") or action_args.strip().startswith("[")):
+                    add_non_conforming(action_name, "press action should have format (\"key\", [presses=number]) or a list of keys", action_code)
                 else:
                     try:
-                        args_list = action_args.split(",")
-                        key_part = args_list[0].strip()
-                        key_value = key_part.strip('"').strip("'")
-                        
-                        presses_part = next((arg for arg in args_list if arg.strip().startswith("presses=")), None)
-                        if presses_part is not None:
-                            presses_value = int(presses_part.split("=")[1])
+                        if not action_args.strip().startswith("["):
+                            args_list = action_args.split(",")
+                            key_part = args_list[0].strip()
+                            key_value = key_part.strip('"').strip("'")
+                            
+                            presses_part = next((arg for arg in args_list if arg.strip().startswith("presses=")), None)
+                            if presses_part is not None:
+                                presses_value = int(presses_part.split("=")[1])
                     except Exception as e:
                         add_non_conforming(action_name, f"error parsing press action arguments: {e}", action_code)
             # terminate follows (status="success") where status can be "success" or "failure" or "fail"
@@ -274,13 +278,38 @@ def verify_action_formats(example, stats):
             elif action_name == "hotkey":
                 if not action_args.strip().startswith("[") or not action_args.strip().endswith("]"):
                     add_non_conforming(action_name, "hotkey action should have format ([\"key1\", \"key2\", ...])", action_code)
+                    import pdb; pdb.set_trace()
                 else:
                     try:
                         keys_part = action_args.strip()[1:-1].strip()  # remove the surrounding brackets
                         keys = [key.strip().strip('"').strip("'") for key in keys_part.split(",")]
                     except Exception as e:
                         add_non_conforming(action_name, f"error parsing hotkey action arguments: {e}", action_code)
-            
+
+def track_click_distribution(example, stats):
+    """
+    Tracks the distribution of click locations in the dataset.
+    """
+    if "click_locations" not in stats:
+        stats["click_locations"] = []
+
+    trajectories = example.get("traj", [])
+    for traj in trajectories:
+        code = traj.get("value", {}).get("code", "not found") 
+        for action_code in code.split("\n"):
+            action_name = action_code.split(".")[1].split("(")[0] if "." in action_code else "not found"
+            if action_name == "not found":
+                continue
+            if action_name in ["click", "rightClick", "doubleClick",  "moveTo", "tripleClick", "middleClick"]:
+                try:
+                    x_arg = next(arg for arg in action_code.split("(")[1].replace(")", "").split(",") if arg.strip().startswith("x="))
+                    y_arg = next(arg for arg in action_code.split("(")[1].replace(")", "").split(",") if arg.strip().startswith("y="))
+                    x_str = x_arg.split("=")[1].strip()
+                    y_str = y_arg.split("=")[1].strip()
+                    
+                    stats["click_locations"].append((x_str, y_str))
+                except Exception as e:
+                    print(f"Error parsing click action arguments for click distribution: {e}")
 
 def track_example_props(example, stats):
     """
@@ -378,11 +407,33 @@ if __name__ == "__main__":
         track_action_types,
         track_example_props,
         track_instruction_length,
-        verify_action_formats,
+        # verify_action_formats,
+        track_click_distribution,
     ]
 
     # 1. Load all records into a single Python list
     stats = profile_dataset(sources, funcs)
 
-    import pdb; pdb.set_trace()
+    click_locs = stats['track_click_distribution']['click_locations']
 
+    # Plot separate (subplot 1 row, 2 cols) distribution plots of x and y decimal places using seaborn countplot
+    sns.set_style("whitegrid")
+    
+    def count_decimals(s):
+        return len(s.split(".")[1]) if "." in s else 0
+
+    x_decimals = [count_decimals(loc[0]) for loc in click_locs]
+    y_decimals = [count_decimals(loc[1]) for loc in click_locs]
+
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    sns.countplot(x=x_decimals)
+    plt.title("X Coordinate Decimal Places")
+
+    plt.subplot(1, 2, 2)
+    sns.countplot(x=y_decimals)
+    plt.title("Y Coordinate Decimal Places")
+
+    plt.savefig("click_granularity.png")
+
+    import pdb; pdb.set_trace()
