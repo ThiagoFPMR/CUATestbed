@@ -1,0 +1,32 @@
+full consequence-driven action space description model
+
+<state>...</state>
+<choices>
+    <op id=0>
+       <desc>...</desc>
+       <action>...</action>
+       <outcome>...</outcome>	
+    </op>
+    <op id=1>
+       <desc>...</desc>
+       <action>...</action>
+       <outcome>...</outcome>	
+    </op>
+    ...
+</choices>
+<think>...</think>
+<answer>id=0</answer>
+
+variations:
+- w/ or w/o desc
+- w/ or w/o reason
+- w/ or w/o state
+
+simplified outcome prediction model
+
+<think>...</think>
+<outcome>...</outcome>
+<answer>...</answer>
+
+variations: 
+- put outcome before or after answer
