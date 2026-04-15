@@ -3,7 +3,7 @@ import os
 from PIL import Image
 from datasets import Dataset
 
-from action_utils import ACTION_PATTERNS, action_code_to_labels
+from action_utils import ACTION_PATTERNS, verify_action_code, get_actions_from_step, labels_from_code
 
 
 def filter_trajectory(traj: dict, alignment_thr: int = 7) -> bool:
@@ -62,41 +62,6 @@ def filter_step(step_idx: int, trajectory: dict, min_instruction_len: int = 10) 
 
     return True
 
-def verify_action_code(code: str) -> bool:
-    """
-    Runs the action code through a series of regex checks to ensure it conforms
-    to the expected format for each action type. 
-    
-    Args:
-        action_code (str): The action code to verify.
-    Returns:
-        bool: True if the action code is valid, False otherwise.
-    """
-    for action_code in code.split("\n"):
-        action_code = action_code.split(".")[1]
-        action_type = action_code.split("(")[0]
-        
-        pattern = ACTION_PATTERNS.get(action_type)
-
-        if not pattern:
-            return False
-        if not pattern.match(action_code):
-            return False
-
-    return True
-
-def get_actions_from_step(code: str) -> str:
-    """Extract the action from a step's code."""
-    actions = "["
-    for action_code in code.split("\n"):
-        action_code = action_code.split(".")[1]
-        if action_code == "terminate(status='fail')":
-            import pdb; pdb.set_trace()
-            action_code ="terminate(status='failure')"
-        actions += f"{action_code}, "
-    actions = actions.rstrip(", ") + "]"
-    return actions
-
 def conversation_from_step(
     step_idx: int, 
     trajectory: dict,
@@ -150,7 +115,7 @@ def conversation_from_step(
         messages.append({
             "role": "assistant",
             "content": [
-                {"type": "text", "text": f"Step: {idx}, Action: {code.split('.')[1]}"}"}
+                {"type": "text", "text": f"Step: {idx}, Action: {code.split('.')[1]}"}
             ]
         })
     
@@ -212,7 +177,7 @@ def load_agentnet_records(
                         min_instruction_len
                     )
                     labels = labels_from_code(steps[step_idx]["value"]["code"])
-                    dataset_records.append({"messages": conversation, "labels": labels})
+                    dataset_records.append({"messages": conversation, "labels": json.dumps(labels)})
 
     return dataset_records
 

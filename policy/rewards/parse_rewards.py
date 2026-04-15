@@ -2,7 +2,7 @@
 Module for parsing reward function names into their corresponding RewardFunction instances.
 """
 
-from . import rewards
+from . import gui_r1_rewards
 from typing import Callable
 
 
