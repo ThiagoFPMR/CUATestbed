@@ -4,7 +4,7 @@ Reward functions for evaluating model actions from our ingestion of the AgentNet
 import re
 import json
 
-from policy.rewards.utils import f1_score, get_actions_from_answer
+from policy.rewards.utils import f1_score, actions_from_completion
 
 
 def accuracy_reward_func(

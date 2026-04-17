@@ -57,7 +57,6 @@ def get_actions_from_step(code: str) -> str:
     for action_code in code.split("\n"):
         action_code = action_code.split(".")[1]
         if action_code == "terminate(status='fail')":
-            import pdb; pdb.set_trace()
             action_code ="terminate(status='failure')"
         actions += f"{action_code}, "
     actions = actions.rstrip(", ") + "]"

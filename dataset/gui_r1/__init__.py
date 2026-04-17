@@ -1,1 +1,1 @@
-from .gui_r1 import load_gui_r1
+from .gui_r1 import get_baked_gui_dataset

@@ -3,7 +3,7 @@ import os
 from PIL import Image
 from datasets import Dataset
 
-from action_utils import ACTION_PATTERNS, verify_action_code, get_actions_from_step, labels_from_code
+from .action_utils import ACTION_PATTERNS, verify_action_code, get_actions_from_step, labels_from_code
 
 
 def filter_trajectory(traj: dict, alignment_thr: int = 7) -> bool:

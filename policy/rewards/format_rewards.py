@@ -5,33 +5,23 @@ import re
 import json
 
 from dataset.agentnet.agentnet import ACTION_PATTERNS
-from policy.rewards.utils import get_actions_from_answer
+from policy.rewards.utils import actions_from_completion
 
 
 def gui_r1_formatting_reward_func(completions, **kwargs):
     """
     Reward function to evaluate the formatting of model completions
     based on the presence of reasoning and solution tags.
-
-    Process should be as follows:
-    <think>...</think>
-    <answer>
-        [{
-            'description': ....,
-            'action': action(parameters),
-        }],...
-    </answer>
-
-    Args:
-        completions (list of str): List of model-generated completions.
-    Returns:
-        list of float: Reward scores for each completion.
     """
-    contents = [completion[0]["content"] for completion in completions]
+    if isinstance(completions[0], list):
+        contents = [completion[-1]["content"] for completion in completions]
+    else:
+        contents = completions
 
     format_rewards = []
     for content in contents:
         format_rewards.append(__gui_r1_formatting_reward_func(content))
+    return format_rewards
 
 def __gui_r1_formatting_reward_func(completion: str):
     """
