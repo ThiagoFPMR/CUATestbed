@@ -30,7 +30,7 @@
 
 </choices>
 
-<think>...</think>
+<reason>...</reason>
 
 <answer>id=0</answer>
 
@@ -50,7 +50,7 @@ variations:
 
 
 
-<think>...</think>
+<reason>...</reason>
 
 <outcome>...</outcome>
 

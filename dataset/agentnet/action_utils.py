@@ -14,8 +14,6 @@ def get_action_patterns() -> dict:
         r"^dragTo\(\s*x=(0(\.\d+)?|1(\.0+)?)\s*,\s*y=(0(\.\d+)?|1(\.0+)?)\s*,\s*button=(['\"])(left|right|middle)\7\s*\)$": ("dragTo",),
         r"^press\(\s*(?:\[\s*(['\"]).*?\1\s*(,\s*(['\"]).*?\3\s*)*\]|(['\"]).*?\4(\s*,\s*presses=\d+)?)\s*\)$": ("press",),
         r"^terminate\(\s*status=(['\"])(success|failure|fail)\2\s*\)$": ("terminate",),
-        r"^navigate\(\s*(['\"]).*?\1\s*\)$": ("navigate",),
-        r"^screenshot\(\s*\)$": ("screenshot",)
     }
 
     action_patterns = {}

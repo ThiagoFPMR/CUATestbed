@@ -14,7 +14,7 @@ full consequence-driven action space description model
     </op>
     ...
 </choices>
-<think>...</think>
+<reason>...</reason>
 <answer>id=0</answer>
 
 variations:
@@ -24,7 +24,7 @@ variations:
 
 simplified outcome prediction model
 
-<think>...</think>
+<reason>...</reason>
 <outcome>...</outcome>
 <answer>...</answer>
 

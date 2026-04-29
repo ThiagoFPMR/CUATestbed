@@ -5,6 +5,7 @@ import re
 import json
 
 from policy.rewards.utils import f1_score, actions_from_completion
+from dataset.agentnet.action_utils import parse_action_arguments
 
 
 def accuracy_reward_func(
@@ -87,9 +88,8 @@ def __accuracy_reward_func(
                 continue
             # if key is arg_n, check that the nth argument in the action code matches the label
             if key.startswith("arg_"):
-                arg_idx = int(key.split("_")[1])
-                arg_pred = re.search(r"\((.*?)\)", action_code).group(1).split(",")[arg_idx].strip()
-                if arg_pred != str(label[i][key]):
+                parsed_pred = parse_action_arguments(action_code)
+                if parsed_pred.get(key) != label[i][key]:
                     return reward_sum / len(pred_actions)
             else:
                 # otherwise, check that the key=value pair is in the action code

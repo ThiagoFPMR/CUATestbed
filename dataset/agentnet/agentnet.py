@@ -112,10 +112,16 @@ def conversation_from_step(
                 ]
             })
 
+        action_codes = [line.split(".")[1] for line in code.strip().split("\n") if line.strip()]
+        action_codes = [
+            "terminate(status='failure')" if ac == "terminate(status='fail')" else ac
+            for ac in action_codes
+        ]
+        actions = [{"action": ac} for ac in action_codes]
         messages.append({
             "role": "assistant",
             "content": [
-                {"type": "text", "text": f"Step: {idx}, Action: {code.split('.')[1]}"}
+                {"type": "text", "text": f"<answer>{repr(actions)}</answer>"}
             ]
         })
     
