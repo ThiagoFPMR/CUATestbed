@@ -11,7 +11,7 @@ from dataset.agentnet.action_utils import parse_action_arguments
 def accuracy_reward_func(
     completions: list[str], 
     labels: list[str], 
-    img_sizes: list[tuple[int, int]],
+    image_sizes: list[tuple[int, int]],
     f1_thr: float = 0.5,
     r: int = 0
 ) -> list[float]:
@@ -21,14 +21,14 @@ def accuracy_reward_func(
     Args:
         completions (list[str]): List of model-generated completion strings.
         labels (list[str]): List of JSON strings representing ground truth actions and parameters.
-        img_sizes (list[tuple[int, int]]): List of image sizes.
+        image_sizes (list[tuple[int, int]]): List of image sizes.
         f1_thr (float): The threshold for F1 score when comparing messages. Default is 0.5.
         r (int): The tolerance radius in pixels for point-based actions. Default is 0 for exact match.
     Returns:
         list[float]: List of accuracy rewards for the batch, between 0 and 1.
     """
     rewards = []
-    for completion, label, img_size in zip(completions, labels, img_sizes):
+    for completion, label, img_size in zip(completions, labels, image_sizes):
         rewards.append(__accuracy_reward_func(completion, label, img_size, f1_thr, r))
     return rewards
 
@@ -55,47 +55,46 @@ def __accuracy_reward_func(
     pred_actions: list[dict] = actions_from_completion(completion)
     pred_actions: list[str] = [action.get("action", "") for action in pred_actions]
 
-    # check that the number of predicted actions matches the number of ground truth actions
-    if len(pred_actions) != len(label):
-        print(f"⛔️ Mismatch in number of predicted actions and ground truth actions. Predicted: {len(pred_actions)}, Ground Truth: {len(label)}")
+    effective_len = min(len(pred_actions), len(label))
+    if effective_len == 0:
         return 0.0
 
     reward_sum = 0.0
-    for i, action_code in enumerate(pred_actions):
+    for i, action_code in enumerate(pred_actions[:effective_len]):
         action_type = action_code.split("(")[0]
-        # Match the action type before checking parameters
         if action_type != label[i]["action"]:
-            return reward_sum / len(pred_actions)  
-        # If the action has point parameters, check that they match as well
-        if "x" in label[i] and "y" in label[i]: 
+            return reward_sum / effective_len
+        if "x" in label[i] and "y" in label[i]:
             x_range = (label[i]["x"] - (0.5 + r) / img_size[1], label[i]["x"] + (0.5 + r) / img_size[1])
             y_range = (label[i]["y"] - (0.5 - r) / img_size[0], label[i]["y"] + (0.5 + r) / img_size[0])
-            
+
             x_pred, y_pred = re.search(r"x=(\d+\.?\d*),\s*y=(\d+\.?\d*)", action_code).groups()
             x_pred, y_pred = float(x_pred), float(y_pred)
 
             if not (x_range[0] <= x_pred <= x_range[1] and y_range[0] <= y_pred <= y_range[1]):
-                return reward_sum / len(pred_actions)
-        # If the action has a message parameter, check that it matches as well
+                return reward_sum / effective_len
         if "message" in label[i]:
             message_pred = re.search(r"message='(.*?)'", action_code).group(1)
             if f1_score(message_pred, label[i]["message"]) < f1_thr:
-                return reward_sum / len(pred_actions)
+                return reward_sum / effective_len
 
-        # every other parameters must be exact match
         for key in label[i]:
             if key in ["action", "x", "y", "message"]:
                 continue
-            # if key is arg_n, check that the nth argument in the action code matches the label
             if key.startswith("arg_"):
                 parsed_pred = parse_action_arguments(action_code)
                 if parsed_pred.get(key) != label[i][key]:
-                    return reward_sum / len(pred_actions)
+                    
+                    return reward_sum / effective_len
             else:
-                # otherwise, check that the key=value pair is in the action code
-                if f"{key}={label[i][key]}" not in action_code:
-                    return reward_sum / len(pred_actions)
+                if isinstance(label[i][key], str):
+                    if (f"{key}='{label[i][key]}'" not in action_code and
+                            f'{key}="{label[i][key]}"' not in action_code):
+                        return reward_sum / effective_len
+                else:
+                    if f"{key}={label[i][key]}" not in action_code:
+                        return reward_sum / effective_len
         
         reward_sum += 1.0
-
-    return reward_sum / len(pred_actions)
+   
+    return reward_sum / effective_len

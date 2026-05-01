@@ -27,7 +27,7 @@ def load_args(config_obj: TrainingArguments, train_args: dict) -> TrainingArgume
 
     return training_args
 
-def load_trainer_from_file(args_path: str) -> Callable:
+def load_trainer_from_file(args_path: str, **config_overrides) -> Callable:
     """
     Load trainer configuration from a YAML file and return a trainer loader function.
 
@@ -45,6 +45,8 @@ def load_trainer_from_file(args_path: str) -> Callable:
 
     with open(args_path, "r") as f:
         trainer_config = yaml.safe_load(f)
+
+    trainer_config.update(config_overrides)
 
     def load_trainer(**kwargs) -> Trainer:
         """

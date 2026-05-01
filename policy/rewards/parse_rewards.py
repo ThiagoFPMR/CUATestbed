@@ -7,7 +7,7 @@ from .format_rewards import *
 from typing import Callable
 
 
-def gui_r1_reward_func(completions, labels, img_sizes):
+def gui_r1_reward_func(completions, labels, image_sizes, **kwargs):
     """
     Combined reward from GUI-R1 paper that incorporates both formatting and accuracy rewards.
     """
@@ -21,7 +21,7 @@ def gui_r1_reward_func(completions, labels, img_sizes):
     # Pass the extracted string contents directly 
     # (Update format_rewards.py or action_rewards.py if they try to re-extract!)
     format_rewards = gui_r1_formatting_reward_func(completions)
-    acc_rewards = accuracy_reward_func(contents, labels, img_sizes)
+    acc_rewards = accuracy_reward_func(contents, labels, image_sizes)
     total_rewards = [0.8 * f + 0.2 * a for f, a in zip(format_rewards, acc_rewards)]
     return total_rewards
 

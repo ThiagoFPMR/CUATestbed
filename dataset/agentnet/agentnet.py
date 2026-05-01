@@ -169,12 +169,22 @@ def load_agentnet_records(
                     continue
                 
                 steps = trajectory.get("traj", [])
+
+                # Precompute labels per step once for the whole trajectory
+                all_step_labels = []
+                for step in steps:
+                    step_labels = labels_from_code(step["value"]["code"])
+                    for lbl in step_labels:
+                        if lbl.get("action") == "terminate" and lbl.get("status") == "fail":
+                            lbl["status"] = "failure"
+                    all_step_labels.append(step_labels)
+
                 for step_idx in range(len(steps)):
                     if not filter_step(step_idx, trajectory):
                         continue
 
                     conversation = conversation_from_step(
-                        step_idx, 
+                        step_idx,
                         trajectory,
                         system_prompt,
                         image_dir,
@@ -182,8 +192,8 @@ def load_agentnet_records(
                         history_images,
                         min_instruction_len
                     )
-                    labels = labels_from_code(steps[step_idx]["value"]["code"])
-                    dataset_records.append({"messages": conversation, "labels": json.dumps(labels)})
+                    future_labels = [lbl for step_lbls in all_step_labels[step_idx:] for lbl in step_lbls]
+                    dataset_records.append({"messages": conversation, "labels": json.dumps(future_labels)})
 
     return dataset_records
 
