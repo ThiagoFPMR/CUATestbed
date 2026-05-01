@@ -1,2 +1,6 @@
 unsloth
 safetensors
+mergekit
+seaborn
+matplotlib
+numpy
