@@ -1,7 +1,7 @@
 """
 General training script for vision-language models using reinforcement learning.
 """
-
+import os
 import argparse
 from safetensors import safe_open
 
@@ -11,6 +11,8 @@ from policy.rewards import parse_rewards
 from policy.trainer import load_trainer_from_file
 
 from dataset.agentnet.agentnet import load_agentnet
+
+os.environ.setdefault("WANDB_PROJECT", "omnibrowse")
 
 
 def train_vlm_rl(
