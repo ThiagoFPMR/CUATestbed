@@ -65,8 +65,10 @@ def __accuracy_reward_func(
         if action_type != label[i]["action"]:
             return reward_sum / effective_len
         if "x" in label[i] and "y" in label[i]:
+            if img_size is None:
+                return reward_sum / effective_len
             x_range = (label[i]["x"] - (0.5 + r) / img_size[1], label[i]["x"] + (0.5 + r) / img_size[1])
-            y_range = (label[i]["y"] - (0.5 - r) / img_size[0], label[i]["y"] + (0.5 + r) / img_size[0])
+            y_range = (label[i]["y"] - (0.5 + r) / img_size[0], label[i]["y"] + (0.5 + r) / img_size[0])
 
             x_pred, y_pred = re.search(r"x=(\d+\.?\d*),\s*y=(\d+\.?\d*)", action_code).groups()
             x_pred, y_pred = float(x_pred), float(y_pred)

@@ -36,11 +36,10 @@ def save_training_params(
 
     with open(trainer_config_path, "r") as f:
         config = yaml.safe_load(f)
-        output_dir = config["output_dir"]
-        config["reward_functions"] = rewards
+    config["reward_functions"] = rewards
 
-    os.makedirs(f"{output_dir}/{experiment_name}/configs", exist_ok = True)
-    shutil.copy(model_config_path, f"{output_dir}/{experiment_name}/configs/{model_config_path.split(os.sep)[-1]}")
+    os.makedirs(f"{experiment_name}/configs", exist_ok=True)
+    shutil.copy(model_config_path, f"{experiment_name}/configs/{model_config_path.split(os.sep)[-1]}")
 
-    with open(f"{output_dir}/{experiment_name}/configs/{trainer_config_path.split(os.sep)[-1]}", "w") as f:
+    with open(f"{experiment_name}/configs/{trainer_config_path.split(os.sep)[-1]}", "w") as f:
         yaml.safe_dump(config, f)

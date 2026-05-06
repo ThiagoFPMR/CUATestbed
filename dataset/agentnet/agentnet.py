@@ -193,7 +193,7 @@ def load_agentnet_records(
                         min_instruction_len
                     )
                     future_labels = [lbl for step_lbls in all_step_labels[step_idx:] for lbl in step_lbls]
-                    dataset_records.append({"messages": conversation, "labels": json.dumps(future_labels)})
+                    dataset_records.append({"prompt": conversation, "labels": json.dumps(future_labels)})
 
     return dataset_records
 
@@ -208,7 +208,7 @@ def load_batch_images(batch: dict) -> dict:
     """
     new_batch = []
     image_sizes = []
-    for conversation in batch["messages"]:
+    for conversation in batch["prompt"]:
         new_conversation = []
         current_size = None
         for message in conversation:
@@ -230,7 +230,7 @@ def load_batch_images(batch: dict) -> dict:
             new_conversation.append({"role": message["role"], "content": new_content})
         new_batch.append(new_conversation)
         image_sizes.append(current_size)
-    return {"messages": new_batch, "labels": batch["labels"], "image_sizes": image_sizes}
+    return {"prompt": new_batch, "labels": batch["labels"], "image_sizes": image_sizes}
 
 def load_agentnet(
     system_prompt: str, 
