@@ -3,6 +3,7 @@ General training script for vision-language models using reinforcement learning.
 """
 import unsloth
 import os
+import torch
 import argparse
 from safetensors import safe_open
 
@@ -34,7 +35,7 @@ def train_vlm_rl(
         trainer_config (str): Path to the trainer configuration file. If does not contain /, it is assumed to be in the trainer configs directory.
         output_dir (str): Directory to save the trained model.
     """
-
+    torch.cuda.empty_cache()
     model, tokenizer = load_model_from_file(model_config)
 
     train_dataset = load_agentnet(base_prompt, history_length=12)
