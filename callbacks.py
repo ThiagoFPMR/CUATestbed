@@ -72,17 +72,17 @@ class CheckpointRetentionCallback(TrainerCallback):
     cascading bucket update. Buckets[k] holds the checkpoint at offset
     ~2^(k+1) saves back. On each save, buckets are updated in reverse order so
     each one captures its predecessor's pre-update value; bucket 0 pulls from
-    the latest. Counter resets after 2^n_buckets saves.
+    the latest. Counter resets after 2^n_ckpts saves.
 
-    Total retained: up to n_buckets + 2 (buckets + latest + best).
+    Total retained: up to n_ckpts + 2 (buckets + latest + best).
     """
 
     CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
 
-    def __init__(self, n_buckets: int = 10, metric_key: str = "reward"):
-        self.n_buckets = n_buckets
+    def __init__(self, n_ckpts: int = 10, metric_key: str = "reward"):
+        self.n_ckpts = n_ckpts
         self.counter = 0
-        self.buckets: list[int | None] = [None] * n_buckets
+        self.buckets: list[int | None] = [None] * n_ckpts
         self.latest: int | None = None
         self.metric_key = metric_key
         self._best_step: int | None = None
@@ -102,14 +102,14 @@ class CheckpointRetentionCallback(TrainerCallback):
         # Reverse cascade: largest offset first so each bucket reads its
         # predecessor's pre-update value. Bucket 0's predecessor is the
         # previous latest (still held in self.latest at this point).
-        for k in range(self.n_buckets - 1, -1, -1):
+        for k in range(self.n_ckpts - 1, -1, -1):
             if self.counter % (2 ** (k + 1)) == 0:
                 if k == 0:
                     self.buckets[0] = self.latest
                 else:
                     self.buckets[k] = self.buckets[k - 1]
 
-        if self.counter == 2 ** self.n_buckets:
+        if self.counter == 2 ** self.n_ckpts:
             self.counter = 0
 
         self.latest = state.global_step

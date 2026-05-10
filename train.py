@@ -48,7 +48,7 @@ def train_vlm_rl(
     # Insert at the front so our additions to the log dict run BEFORE PrinterCallback
     # and WandbCallback consume it.
     trainer.callback_handler.callbacks.insert(0, StepTimerCallback())
-    trainer.callback_handler.callbacks.append(CheckpointRetentionCallback(max_keep=10))
+    trainer.callback_handler.callbacks.append(CheckpointRetentionCallback(n_ckpts=10))
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     print("🏁 Training completed successfully!")
