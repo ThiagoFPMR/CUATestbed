@@ -3,17 +3,21 @@ Reward functions for evaluating model actions from our ingestion of the AgentNet
 """
 import re
 import json
+import logging
 
 from policy.rewards.utils import f1_score, actions_from_completion
 from dataset.agentnet.action_utils import parse_action_arguments
 
+logger = logging.getLogger(__name__)
+
 
 def accuracy_reward_func(
-    completions: list[str], 
-    labels: list[str], 
+    completions: list[str],
+    labels: list[str],
     image_sizes: list[tuple[int, int]],
     f1_thr: float = 0.5,
-    r: int = 0
+    point_tol: int = 0,
+    scroll_tol: int = 0,
 ) -> list[float]:
     """
     Compute accuracy reward for a batch based on whether the predicted actions match the ground truth actions.
@@ -23,21 +27,27 @@ def accuracy_reward_func(
         labels (list[str]): List of JSON strings representing ground truth actions and parameters.
         image_sizes (list[tuple[int, int]]): List of image sizes.
         f1_thr (float): The threshold for F1 score when comparing messages. Default is 0.5.
-        r (int): The tolerance radius in pixels for point-based actions. Default is 0 for exact match.
+        point_tol (int): Tolerance radius in pixels for x/y point actions. Default is 0 (exact match).
+        scroll_tol (int): Tolerance in pixels for scroll/hscroll delta. Default is 0 (exact match).
     Returns:
         list[float]: List of accuracy rewards for the batch, between 0 and 1.
     """
     rewards = []
     for completion, label, img_size in zip(completions, labels, image_sizes):
-        rewards.append(__accuracy_reward_func(completion, label, img_size, f1_thr, r))
+        try:
+            rewards.append(__accuracy_reward_func(completion, label, img_size, f1_thr, point_tol, scroll_tol))
+        except Exception as e:
+            logger.warning("accuracy_reward_func skipped example: %s | completion=%r | label=%r", e, completion[:200], label[:200])
+            rewards.append(0.0)
     return rewards
 
 def __accuracy_reward_func(
-    completion: str, 
-    label: str, 
-    img_size: tuple[int, int], 
-    f1_thr: float = 0.5, 
-    r: int = 0
+    completion: str,
+    label: str,
+    img_size: tuple[int, int],
+    f1_thr: float = 0.5,
+    point_tol: int = 0,
+    scroll_tol: int = 0,
 ) -> float:
     """
     Compute accuracy reward for a single completion and label pair.
@@ -47,7 +57,8 @@ def __accuracy_reward_func(
         label (str): The ground truth actions and parameters as a JSON string.
         img_size (tuple[int, int]): The size of the image (height, width).
         f1_thr (float): The threshold for F1 score when comparing messages. Default is 0.5.
-        r (int): The tolerance radius in pixels for point-based actions. Default is 0 for exact match.
+        point_tol (int): Tolerance radius in pixels for x/y point actions. Default is 0 (exact match).
+        scroll_tol (int): Tolerance in pixels for scroll/hscroll delta. Default is 0 (exact match).
     Returns:
         float: Accuracy reward, 1.0 if the predicted action matches the ground truth, else 0.0.
     """
@@ -64,39 +75,56 @@ def __accuracy_reward_func(
         action_type = action_code.split("(")[0]
         if action_type != label[i]["action"]:
             return reward_sum / effective_len
+
+        # Correct action type: 0.5 credit. Check args for the remaining 0.5.
+        reward_sum += 0.5
+
         if "x" in label[i] and "y" in label[i]:
             if img_size is None:
                 return reward_sum / effective_len
-            x_range = (label[i]["x"] - (0.5 + r) / img_size[1], label[i]["x"] + (0.5 + r) / img_size[1])
-            y_range = (label[i]["y"] - (0.5 + r) / img_size[0], label[i]["y"] + (0.5 + r) / img_size[0])
+            x_range = (label[i]["x"] - (0.5 + point_tol) / img_size[1], label[i]["x"] + (0.5 + point_tol) / img_size[1])
+            y_range = (label[i]["y"] - (0.5 + point_tol) / img_size[0], label[i]["y"] + (0.5 + point_tol) / img_size[0])
 
-            x_pred, y_pred = re.search(r"x=(\d+\.?\d*),\s*y=(\d+\.?\d*)", action_code).groups()
+            xy_match = re.search(r"x=(\d+\.?\d*),\s*y=(\d+\.?\d*)", action_code)
+            if xy_match is None:
+                return reward_sum / effective_len
+            x_pred, y_pred = xy_match.groups()
             x_pred, y_pred = float(x_pred), float(y_pred)
 
             if not (x_range[0] <= x_pred <= x_range[1] and y_range[0] <= y_pred <= y_range[1]):
                 return reward_sum / effective_len
         if "message" in label[i]:
-            message_pred = re.search(r"message='(.*?)'", action_code).group(1)
+            msg_match = re.search(r"message='(.*?)'", action_code) or re.search(r'message="(.*?)"', action_code)
+            if msg_match is None:
+                return reward_sum / effective_len
+            message_pred = msg_match.group(1)
             if f1_score(message_pred, label[i]["message"]) < f1_thr:
                 return reward_sum / effective_len
 
-        for key in label[i]:
-            if key in ["action", "x", "y", "message"]:
-                continue
-            if key.startswith("arg_"):
-                parsed_pred = parse_action_arguments(action_code)
-                if parsed_pred.get(key) != label[i][key]:
-                    
-                    return reward_sum / effective_len
-            else:
-                if isinstance(label[i][key], str):
-                    if (f"{key}='{label[i][key]}'" not in action_code and
-                            f'{key}="{label[i][key]}"' not in action_code):
+        if action_type in ("scroll", "hscroll"):
+            parsed_pred = parse_action_arguments(action_code)
+            pred_delta = parsed_pred.get("arg_0")
+            gt_delta = label[i].get("arg_0")
+            if pred_delta is None or gt_delta is None or abs(pred_delta - gt_delta) > scroll_tol:
+                return reward_sum / effective_len
+        else:
+            for key in label[i]:
+                if key in ["action", "x", "y", "message"]:
+                    continue
+                if key.startswith("arg_"):
+                    parsed_pred = parse_action_arguments(action_code)
+                    if parsed_pred.get(key) != label[i][key]:
                         return reward_sum / effective_len
                 else:
-                    if f"{key}={label[i][key]}" not in action_code:
-                        return reward_sum / effective_len
-        
-        reward_sum += 1.0
-   
+                    if isinstance(label[i][key], str):
+                        if (f"{key}='{label[i][key]}'" not in action_code and
+                                f'{key}="{label[i][key]}"' not in action_code):
+                            return reward_sum / effective_len
+                    else:
+                        if f"{key}={label[i][key]}" not in action_code:
+                            return reward_sum / effective_len
+
+        # Full hit: add the remaining 0.5.
+        reward_sum += 0.5
+
     return reward_sum / effective_len

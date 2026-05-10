@@ -33,7 +33,7 @@ def __gui_r1_formatting_reward_func(completion: str):
     Returns:
         float: Reward score for the completion.
     """
-    target_format = re.compile(r"<reason>.*?</reason>\s*<answer>.*?</answer>", re.DOTALL)
+    target_format = re.compile(r"<observation>.*?</observation>\s*<reason>.*?</reason>\s*<answer>.*?</answer>", re.DOTALL)
     if not re.fullmatch(target_format, completion):
         return 0.0
 

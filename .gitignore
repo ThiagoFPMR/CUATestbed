@@ -8,6 +8,7 @@ cache/
 cua/
 data/
 wandb/
+qwen*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

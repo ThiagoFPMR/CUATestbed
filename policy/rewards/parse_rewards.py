@@ -21,8 +21,8 @@ def gui_r1_reward_func(completions, labels, image_sizes, **kwargs):
     # Pass the extracted string contents directly 
     # (Update format_rewards.py or action_rewards.py if they try to re-extract!)
     format_rewards = gui_r1_formatting_reward_func(completions)
-    acc_rewards = accuracy_reward_func(contents, labels, image_sizes)
-    total_rewards = [0.8 * f + 0.2 * a for f, a in zip(format_rewards, acc_rewards)]
+    acc_rewards = accuracy_reward_func(contents, labels, image_sizes, point_tol=8, scroll_tol=16)
+    total_rewards = [0.6 * f + 0.4 * a for f, a in zip(format_rewards, acc_rewards)]
     return total_rewards
 
 def parse_rewards(reward_names: list[str]) -> list[Callable]:
