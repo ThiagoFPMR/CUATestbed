@@ -199,6 +199,8 @@ def load_agentnet_records(
 LAST_EXAMPLE_IMAGE_COUNTS: list[int] = []
 # (height, width) of the *current step's* image for each example produced.
 LAST_EXAMPLE_IMAGE_HW: list[tuple[int, int]] = []
+# Number of history turns (assistant messages) per example.
+LAST_EXAMPLE_HISTORY_LENGTHS: list[int] = []
 def load_batch_images(batch: dict) -> dict:
     """
     Load images for a batch of conversations and replace image paths with actual image data.
@@ -237,6 +239,8 @@ def load_batch_images(batch: dict) -> dict:
         LAST_EXAMPLE_IMAGE_COUNTS.append(n_images_in_example)
         if current_size is not None:
             LAST_EXAMPLE_IMAGE_HW.append(current_size)
+        history_len = sum(1 for m in new_conversation if m["role"] == "assistant")
+        LAST_EXAMPLE_HISTORY_LENGTHS.append(history_len)
     return {"prompt": new_batch, "labels": batch["labels"], "image_sizes": image_sizes}
 
 def load_agentnet(

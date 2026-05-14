@@ -64,6 +64,10 @@ class StepTimerCallback(TrainerCallback):
             pixels = [h * w for h, w in hws]
             logs["example_image_pixels_mean"] = round(sum(pixels) / len(pixels), 0)
             agentnet_module.LAST_EXAMPLE_IMAGE_HW = []
+        history_lens = agentnet_module.LAST_EXAMPLE_HISTORY_LENGTHS
+        if history_lens:
+            logs["example_history_len_mean"] = round(sum(history_lens) / len(history_lens), 3)
+            agentnet_module.LAST_EXAMPLE_HISTORY_LENGTHS = []
 
 
 class CheckpointRetentionCallback(TrainerCallback):
