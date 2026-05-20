@@ -156,6 +156,7 @@ def track_action_types(example, stats):
     """
     Tracks the distribution of action types in the dataset.
     """
+    import pdb; pdb.set_trace()
     if "action_type_counts" not in stats:
         stats["action_type_counts"] = {}
         stats["action_types"] = set()
@@ -434,6 +435,6 @@ if __name__ == "__main__":
     sns.countplot(x=y_decimals)
     plt.title("Y Coordinate Decimal Places")
 
-    plt.savefig("click_granularity.png")
+    plt.savefig("click_granularity.png") 
 
     import pdb; pdb.set_trace()

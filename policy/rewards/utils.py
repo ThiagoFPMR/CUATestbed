@@ -46,13 +46,12 @@ def actions_from_completion(completion: str) -> list[dict[str, str]]:
         if not isinstance(actions, list):
             return []
             
-        # Validate that every item is a dictionary with the required keys
+        # 'description' is optional (interpretability only); 'action' is required for scoring.
         is_valid = all(
-            isinstance(item, dict) and 
-            'description' in item and 
+            isinstance(item, dict) and
             'action' in item and
-            isinstance(item.get('description'), str) and
-            isinstance(item.get('action'), str)
+            isinstance(item.get('action'), str) and
+            (item.get('description') is None or isinstance(item.get('description'), str))
             for item in actions
         )
         

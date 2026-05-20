@@ -68,6 +68,7 @@ def conversation_from_step(
     system_prompt: str,
     images_dir: str,
     history_length: int = 3,
+    keep_n_observations: int = 3,
     min_instruction_len: int = 10
 ) -> list:
     """
@@ -110,21 +111,26 @@ def conversation_from_step(
                     {"type": "image", "image": os.path.join(images_dir, step["image"])},
                 ]
             })
-        
-        observation = step["value"].get("observation", "")
+
         action_codes = [line.split(".")[1] for line in code.strip().split("\n") if line.strip()]
         action_codes = [
             "terminate(status='failure')" if ac == "terminate(status='fail')" else ac
             for ac in action_codes
         ]
         actions = [{"action": ac} for ac in action_codes]
+        # Keep <observation> text for the last N prior steps; older steps carry actions only.
+        if idx >= step_idx - keep_n_observations:
+            observation = step["value"].get("observation", "")
+            assistant_text = f"<observation>{observation}</observation><answer>{repr(actions)}</answer>"
+        else:
+            assistant_text = f"<answer>{repr(actions)}</answer>"
         messages.append({
             "role": "assistant",
             "content": [
-                {"type": "text", "text": f"<observation>{observation}</observation><answer>{repr(actions)}</answer>"}
+                {"type": "text", "text": assistant_text}
             ]
         })
-    
+
     # Add the current step
     messages.append({
         "role": "user",
@@ -140,6 +146,7 @@ def load_agentnet_records(
     system_prompt: str,
     data_sources: list,
     history_length: int = 3,
+    keep_n_observations: int = 3,
     min_instruction_len: int = 10
 ) -> list:
     """
@@ -186,8 +193,9 @@ def load_agentnet_records(
                         trajectory,
                         system_prompt,
                         image_dir,
-                        history_length,
-                        min_instruction_len
+                        history_length=history_length,
+                        keep_n_observations=keep_n_observations,
+                        min_instruction_len=min_instruction_len,
                     )
                     future_labels = [lbl for step_lbls in all_step_labels[step_idx:] for lbl in step_lbls]
                     dataset_records.append({"prompt": conversation, "labels": json.dumps(future_labels)})
@@ -223,6 +231,8 @@ def load_batch_images(batch: dict) -> dict:
                     try:
                         image_path = item["image"]
                         image = Image.open(image_path).convert("RGB")
+                        # Cap longest side; preserves aspect ratio, never upscales.
+                        image.thumbnail((1280, 1280), Image.BILINEAR)
                         current_size = (image.size[1], image.size[0])  # (height, width)
                         new_content.append({"type": "image", "image": image})
                         n_images_in_example += 1
@@ -246,6 +256,7 @@ def load_batch_images(batch: dict) -> dict:
 def load_agentnet(
     system_prompt: str,
     history_length: int = 3,
+    keep_n_observations: int = 3,
     min_instruction_len: int = 10
 ) -> Dataset:
     """
@@ -254,6 +265,8 @@ def load_agentnet(
     Args:
         system_prompt (str): The system prompt to use for all conversations.
         history_length (int): The number of previous steps to include in the conversation history.
+        keep_n_observations (int): Number of most-recent prior steps that keep their <observation> text.
+            Older history steps emit only the action list.
         min_instruction_len (int): The minimum length of the human instruction in words.
     Returns:
         Dataset: A Hugging Face Dataset object containing the processed AgentNet data.
@@ -279,7 +292,13 @@ def load_agentnet(
     ]
 
     # Load all records and apply set transformations to load images in batches
-    agentnet_records = load_agentnet_records(system_prompt, sources, history_length, min_instruction_len)
+    agentnet_records = load_agentnet_records(
+        system_prompt,
+        sources,
+        history_length=history_length,
+        keep_n_observations=keep_n_observations,
+        min_instruction_len=min_instruction_len,
+    )
     agentnet_dataset = Dataset.from_list(agentnet_records)
     agentnet_dataset.set_transform(load_batch_images)
 

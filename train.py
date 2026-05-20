@@ -1,8 +1,8 @@
 """
 General training script for vision-language models using reinforcement learning.
 """
-import unsloth
 import os
+import unsloth
 import torch
 import argparse
 from safetensors import safe_open
@@ -91,18 +91,18 @@ if __name__ == "__main__":
     base_prompt = (
         "You are a desktop GUI agent. Given a screenshot of the current screen and a task instruction, decide the next action(s) to take.\n\n"
         "## Conversation history format\n"
-        "Earlier turns in the conversation are a log of what has already been done:\n"
-        "- The turn immediately before the current screenshot shows that screenshot directly (as an image), followed by a bare action list.\n"
-        "- All older turns show a text <observation> describing the screen state at that point, followed by a bare action list.\n"
-        "This asymmetry is intentional: you get the full image only for the most recent prior step so that the conversation stays within the model's capacity. Use the older text observations to understand the trajectory up to that point.\n"
-        "YOUR own reply must NOT use that bare format; it must follow the full format below.\n\n"
+        "Earlier turns are a log of what has already been done. They appear in three tiers, from newest to oldest:\n"
+        "- Most recent prior step: the screenshot is shown directly as an image, followed by a text <observation> of that screen and a bare action list.\n"
+        "- The two steps before that: a text <observation> describing the screen state at that point, followed by a bare action list. No screenshot.\n"
+        "- All older steps: only a bare action list — no observation and no screenshot. Treat these as a trail of actions already attempted, not as a reconstruction of past screens.\n"
+        "YOUR own reply must NOT use any of these compact formats; it must follow the full format below.\n\n"
         "## Output format — your response must follow this exactly\n"
         "Begin with <observation>, then <reason>, then <answer>, and STOP. No preamble. No text after </answer>.\n\n"
         "Skeleton:\n"
         "<observation>OBSERVATION</observation> <reason>REASONING</reason> <answer>[{'description': 'DESCRIPTION', 'action': 'ACTION_CALL'}]</answer>\n\n"
         "Where:\n"
         "- OBSERVATION: a concise description of the current screen state — what application is open, what is visible, where the cursor/focus appears to be, any notable UI elements. Two to four sentences. This is your grounding step before reasoning.\n"
-        "- REASONING: a structured analysis (see 'How to reason' below). Keep it focused — typically 3–8 sentences, longer only when the situation genuinely warrants it. Write in the first person.\n"
+        "- REASONING: a structured analysis (see 'How to reason' below). Keep it focused and write in the first person.\n"
         "- The <answer> body is a Python list literal of dicts. Each dict MUST have BOTH keys:\n"
         "    'description' — a short natural-language summary of what this action does and why. Refer to the target by its visible name, label, or distinguishing features (shape, color, position) — NOT by coordinates. For window controls, identify them correctly: minimize is '—', maximize is '□', close is 'X'. If a UI element's name is in a non-English language, keep the original language.\n"
         "    'action'      — a single action call string from the table below, in the exact syntax shown.\n"
@@ -154,10 +154,6 @@ if __name__ == "__main__":
         "<observation>The screen shows a text editor application with a menu bar at the top. The File, Edit, View, and Help menus are visible. The document area below is empty and no menus are currently open. The cursor appears to be in the main document body.</observation> <reason>The history shows I haven't opened any menus yet, and the current screenshot confirms I'm at the application's main window. The File menu sits in the top-left of the toolbar, and I need it to reach 'Open Recent'. Alternatives — a keyboard shortcut like Ctrl+O — would skip the recent-files list, so the menu is the right path. After clicking I expect the File dropdown to appear, exposing 'Open Recent' as a submenu.</reason> <answer>[{'description': 'Open the File menu in the top-left of the menu bar', 'action': \"click(x=0.04, y=0.03)\"}]</answer>\n\n"
         "Example B — keyboard shortcut, recovering from a previous misstep:\n"
         "<observation>The screen shows a document editor with text content visible. The cursor is blinking inside the document body, indicating the editor has focus. The title bar shows the filename without a dirty indicator, but I have not yet saved the changes made in this session.</observation> <reason>The previous action clicked into the document body, which means the editor is now focused — good, that's the prerequisite for a save shortcut. The task is to save the file, and I haven't done that yet. Ctrl+S is the standard save shortcut and avoids menu navigation entirely. After pressing it I expect either a silent save (title bar dirty marker disappears) or a Save As dialog if the file is untitled.</reason> <answer>[{'description': 'Save the document with the Ctrl+S shortcut', 'action': \"hotkey(['ctrl', 's'])\"}]</answer>\n\n"
-        "Example C — typing then submitting (two actions in one step), with a text-input plan:\n"
-        "<observation>The browser address bar is highlighted and appears empty, indicating it has focus after the previous click. The current page content is still visible behind the selected bar. No dropdown suggestions are showing yet.</observation> <reason>The previous action clicked the address bar, and the screenshot confirms the cursor is now in it (the bar is highlighted and empty). I need to navigate to Hacker News, so I'll type the URL and then press Enter — these belong to a single step because separating them risks the bar losing focus. Expected end state: the address bar contains 'https://news.ycombinator.com' and the page begins loading.</reason> <answer>[{'description': 'Type the target URL into the focused address bar', 'action': \"write(message='https://news.ycombinator.com')\"}, {'description': 'Submit the address bar to navigate to the page', 'action': \"press('enter')\"}]</answer>\n\n"
-        "Example D — consolidated repeated keypress:\n"
-        "<observation>The screen shows a search interface with a text field that contains stale text 'old query'. The field appears focused based on the cursor position visible at the end of the text. No search results are currently displayed.</observation> <reason>The search field currently contains stale text 'old query' (10 characters) and is focused, per the prior action. I need to clear it before typing the new query. Pressing Backspace 10 times in one consolidated action is cleaner than ten separate dicts, and selecting-all-then-typing would also work but is no shorter here. After this the field should be empty and ready for new input.</reason> <answer>[{'description': 'Clear the search field by pressing Backspace ten times', 'action': \"press('backspace', presses=10)\"}]</answer>"
     )
 
     train_vlm_rl(base_prompt, args.experiment_name, args.model_config, args.trainer_config, args.rewards, args.resume_from_checkpoint)
