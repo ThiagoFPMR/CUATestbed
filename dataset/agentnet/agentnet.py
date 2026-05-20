@@ -220,6 +220,10 @@ def load_batch_images(batch: dict) -> dict:
     """
     new_batch = []
     image_sizes = []
+    # RepeatSampler yields each index num_generations times in a row, so the same
+    # conversation (and its image paths) appears multiple times per batch. Cache by
+    # path to open+decode+thumbnail each unique image once.
+    image_cache: dict[str, Image.Image] = {}
     for conversation in batch["prompt"]:
         new_conversation = []
         current_size = None
@@ -228,17 +232,20 @@ def load_batch_images(batch: dict) -> dict:
             new_content = []
             for item in message["content"]:
                 if item["type"] == "image":
-                    try:
-                        image_path = item["image"]
-                        image = Image.open(image_path).convert("RGB")
-                        # Cap longest side; preserves aspect ratio, never upscales.
-                        image.thumbnail((1280, 1280), Image.BILINEAR)
-                        current_size = (image.size[1], image.size[0])  # (height, width)
-                        new_content.append({"type": "image", "image": image})
-                        n_images_in_example += 1
-                    except Exception as e:
-                        print(f"Error loading image {item['image']}: {e}")
-                        continue
+                    image_path = item["image"]
+                    image = image_cache.get(image_path)
+                    if image is None:
+                        try:
+                            image = Image.open(image_path).convert("RGB")
+                            # Cap longest side; preserves aspect ratio, never upscales.
+                            image.thumbnail((1280, 1280), Image.BILINEAR)
+                        except Exception as e:
+                            print(f"Error loading image {image_path}: {e}")
+                            continue
+                        image_cache[image_path] = image
+                    current_size = (image.size[1], image.size[0])  # (height, width)
+                    new_content.append({"type": "image", "image": image})
+                    n_images_in_example += 1
                 else:
                     if "image" in item:
                         del item["image"]
