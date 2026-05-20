@@ -20,7 +20,7 @@ class StepTimerCallback(TrainerCallback):
      - Optionally empties the GPU cache every N steps to manage memory fragmentation.
      (Note: frequent cache clearing can impact performance, so use with caution and adjust the frequency
     """
-    EMPTY_CACHE_EVERY_N_STEPS = 10
+    EMPTY_CACHE_EVERY_N_STEPS = 2
 
     def __init__(self):
         self._t0 = None
