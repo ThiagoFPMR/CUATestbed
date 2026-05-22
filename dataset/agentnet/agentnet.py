@@ -1,5 +1,6 @@
 import json
 import os
+import time
 from PIL import Image
 from datasets import Dataset
 
@@ -209,6 +210,9 @@ LAST_EXAMPLE_IMAGE_COUNTS: list[int] = []
 LAST_EXAMPLE_IMAGE_HW: list[tuple[int, int]] = []
 # Number of history turns (assistant messages) per example.
 LAST_EXAMPLE_HISTORY_LENGTHS: list[int] = []
+# Wall-clock seconds spent inside load_batch_images per call; drained by StepTimerCallback.
+# Lets us split step_time_s into data-loading vs compute to localize latency spikes.
+LAST_DATA_LOAD_TIMES: list[float] = []
 def load_batch_images(batch: dict) -> dict:
     """
     Load images for a batch of conversations and replace image paths with actual image data.
@@ -218,12 +222,9 @@ def load_batch_images(batch: dict) -> dict:
     Returns:
         dict: The batch with images loaded as PIL Image objects.
     """
+    _t0 = time.perf_counter()
     new_batch = []
     image_sizes = []
-    # RepeatSampler yields each index num_generations times in a row, so the same
-    # conversation (and its image paths) appears multiple times per batch. Cache by
-    # path to open+decode+thumbnail each unique image once.
-    image_cache: dict[str, Image.Image] = {}
     for conversation in batch["prompt"]:
         new_conversation = []
         current_size = None
@@ -232,20 +233,17 @@ def load_batch_images(batch: dict) -> dict:
             new_content = []
             for item in message["content"]:
                 if item["type"] == "image":
-                    image_path = item["image"]
-                    image = image_cache.get(image_path)
-                    if image is None:
-                        try:
-                            image = Image.open(image_path).convert("RGB")
-                            # Cap longest side; preserves aspect ratio, never upscales.
-                            image.thumbnail((1280, 1280), Image.BILINEAR)
-                        except Exception as e:
-                            print(f"Error loading image {image_path}: {e}")
-                            continue
-                        image_cache[image_path] = image
-                    current_size = (image.size[1], image.size[0])  # (height, width)
-                    new_content.append({"type": "image", "image": image})
-                    n_images_in_example += 1
+                    try:
+                        image_path = item["image"]
+                        image = Image.open(image_path).convert("RGB")
+                        # Cap longest side; preserves aspect ratio, never upscales.
+                        image.thumbnail((1280, 1280), Image.BILINEAR)
+                        current_size = (image.size[1], image.size[0])  # (height, width)
+                        new_content.append({"type": "image", "image": image})
+                        n_images_in_example += 1
+                    except Exception as e:
+                        print(f"Error loading image {item['image']}: {e}")
+                        continue
                 else:
                     if "image" in item:
                         del item["image"]
@@ -258,6 +256,7 @@ def load_batch_images(batch: dict) -> dict:
             LAST_EXAMPLE_IMAGE_HW.append(current_size)
         history_len = sum(1 for m in new_conversation if m["role"] == "assistant")
         LAST_EXAMPLE_HISTORY_LENGTHS.append(history_len)
+    LAST_DATA_LOAD_TIMES.append(time.perf_counter() - _t0)
     return {"prompt": new_batch, "labels": batch["labels"], "image_sizes": image_sizes}
 
 def load_agentnet(

@@ -68,6 +68,12 @@ class StepTimerCallback(TrainerCallback):
         if history_lens:
             logs["example_history_len_mean"] = round(sum(history_lens) / len(history_lens), 3)
             agentnet_module.LAST_EXAMPLE_HISTORY_LENGTHS = []
+        # Total wall time spent loading/decoding images this step. If this tracks
+        # step_time_s on a spike, the latency is data-loading (I/O), not compute.
+        data_load_times = agentnet_module.LAST_DATA_LOAD_TIMES
+        if data_load_times:
+            logs["data_load_s"] = round(sum(data_load_times), 3)
+            agentnet_module.LAST_DATA_LOAD_TIMES = []
 
 
 class CheckpointRetentionCallback(TrainerCallback):
