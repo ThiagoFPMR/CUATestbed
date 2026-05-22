@@ -11,7 +11,7 @@ from utils import save_training_params
 from model import load_model_from_file
 from policy.rewards import parse_rewards
 from policy.trainer import load_trainer_from_file
-from callbacks import StepTimerCallback, CheckpointRetentionCallback
+from callbacks import StepTimerCallback, CheckpointRetentionCallback, S3UploadCallback
 
 from dataset.agentnet.agentnet import load_agentnet
 
@@ -25,6 +25,7 @@ def train_vlm_rl(
         trainer_config: str,
         rewards: list[str],
         resume_from_checkpoint: bool | str = False,
+        s3_uri: str | None = None,
 ) -> None:
     """
     Train a vision-language model using reinforcement learning.
@@ -34,6 +35,7 @@ def train_vlm_rl(
         model_config (str): Path to the model configuration file. If does not contain /, it is assumed to be in the model configs directory.
         trainer_config (str): Path to the trainer configuration file. If does not contain /, it is assumed to be in the trainer configs directory.
         output_dir (str): Directory to save the trained model.
+        s3_uri (str | None): If set (e.g. s3://bucket/prefix), mirror checkpoints and final artifacts to S3.
     """
     torch.cuda.empty_cache()
     model, tokenizer = load_model_from_file(model_config)
@@ -50,6 +52,11 @@ def train_vlm_rl(
     # and WandbCallback consume it.
     trainer.callback_handler.callbacks.insert(0, StepTimerCallback())
     trainer.callback_handler.callbacks.append(CheckpointRetentionCallback(n_ckpts=10))
+
+    s3_callback = None
+    if s3_uri:
+        s3_callback = S3UploadCallback(s3_uri, experiment_name)
+        trainer.callback_handler.callbacks.append(s3_callback)
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     print("🏁 Training completed successfully!")
@@ -78,6 +85,11 @@ def train_vlm_rl(
             assert(n_zeros.item() != tensor.numel())
     print("✅ LoRA model saved and verified successfully!")
 
+    # Push final artifacts and block until all background uploads finish.
+    if s3_callback is not None:
+        s3_callback.finish(experiment_name)
+        print(f"☁️  Experiment data uploaded to {s3_uri}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a vision-language model using reinforcement learning. Output directory is specified in the trainer config.")
@@ -86,6 +98,7 @@ if __name__ == "__main__":
     parser.add_argument("--trainer_config", type=str, required=False, default="gspo.yml", help="Path to the trainer configuration file.")
     parser.add_argument("--rewards", type=str, nargs="+", required=False, default=["gui_r1"], help="List of reward function names.")
     parser.add_argument("--resume_from_checkpoint", nargs="?", const=True, default=False, help="Resume training. Pass with no value to auto-detect the latest checkpoint in the experiment dir, or pass a path to a specific checkpoint.")
+    parser.add_argument("--s3_uri", type=str, required=False, default=None, help="If set (e.g. s3://bucket/prefix), mirror each checkpoint and the final artifacts to S3. For cloud boxes with ephemeral local storage.")
     args = parser.parse_args()
 
     base_prompt = (
@@ -156,4 +169,4 @@ if __name__ == "__main__":
         "<observation>The screen shows a document editor with text content visible. The cursor is blinking inside the document body, indicating the editor has focus. The title bar shows the filename without a dirty indicator, but I have not yet saved the changes made in this session.</observation> <reason>The previous action clicked into the document body, which means the editor is now focused — good, that's the prerequisite for a save shortcut. The task is to save the file, and I haven't done that yet. Ctrl+S is the standard save shortcut and avoids menu navigation entirely. After pressing it I expect either a silent save (title bar dirty marker disappears) or a Save As dialog if the file is untitled.</reason> <answer>[{'description': 'Save the document with the Ctrl+S shortcut', 'action': \"hotkey(['ctrl', 's'])\"}]</answer>\n\n"
     )
 
-    train_vlm_rl(base_prompt, args.experiment_name, args.model_config, args.trainer_config, args.rewards, args.resume_from_checkpoint)
+    train_vlm_rl(base_prompt, args.experiment_name, args.model_config, args.trainer_config, args.rewards, args.resume_from_checkpoint, args.s3_uri)

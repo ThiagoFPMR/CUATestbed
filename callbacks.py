@@ -5,6 +5,9 @@ import os
 import re
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlparse
+
 import torch
 from transformers import TrainerCallback
 
@@ -136,3 +139,57 @@ class CheckpointRetentionCallback(TrainerCallback):
             step = int(m.group(1))
             if step not in keep_steps:
                 shutil.rmtree(os.path.join(args.output_dir, name), ignore_errors=True)
+
+
+class S3UploadCallback(TrainerCallback):
+    """
+    Mirror each checkpoint to S3 as it is written, via a background thread pool
+    so training never blocks on network I/O. Intended for cloud boxes with
+    ephemeral local storage. After training, call `finish()` to push the final
+    top-level artifacts (adapter, tokenizer, config copies) and block until
+    every upload has completed.
+
+    Uploads are additive — nothing is deleted from S3 — so the local
+    CheckpointRetentionCallback's pruning does not propagate to the bucket.
+    """
+
+    def __init__(self, s3_uri: str, experiment_name: str, max_workers: int = 4):
+        import boto3  # lazy: only required when --s3_uri is passed
+
+        parsed = urlparse(s3_uri)
+        if parsed.scheme != "s3" or not parsed.netloc:
+            raise ValueError(f"--s3_uri must look like s3://bucket/prefix, got: {s3_uri}")
+        self.bucket = parsed.netloc
+        base = parsed.path.strip("/")
+        self.prefix = f"{base}/{experiment_name}".strip("/")
+        self._client = boto3.client("s3")
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._futures: list = []
+
+    def _upload_file(self, local_path: str, key: str) -> None:
+        try:
+            self._client.upload_file(local_path, self.bucket, key)
+        except Exception as e:
+            print(f"S3 upload failed for {local_path} -> s3://{self.bucket}/{key}: {e}")
+
+    def _submit_tree(self, local_root: str, key_prefix: str, skip_checkpoints: bool = False) -> None:
+        for dirpath, dirnames, filenames in os.walk(local_root):
+            if skip_checkpoints:
+                dirnames[:] = [d for d in dirnames if not d.startswith("checkpoint-")]
+            for name in filenames:
+                local_path = os.path.join(dirpath, name)
+                rel = os.path.relpath(local_path, local_root).replace(os.sep, "/")
+                key = f"{key_prefix}/{rel}"
+                self._futures.append(self._executor.submit(self._upload_file, local_path, key))
+
+    def on_save(self, args, state, control, **kwargs):
+        ckpt = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+        if os.path.isdir(ckpt):
+            self._submit_tree(ckpt, f"{self.prefix}/checkpoint-{state.global_step}")
+
+    def finish(self, local_dir: str) -> None:
+        """Upload final top-level artifacts and block until every upload is done."""
+        self._submit_tree(local_dir, self.prefix, skip_checkpoints=True)
+        for f in self._futures:
+            f.result()
+        self._executor.shutdown(wait=True)

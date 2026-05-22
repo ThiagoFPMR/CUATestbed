@@ -4,3 +4,4 @@ mergekit
 seaborn
 matplotlib
 numpy
+boto3
