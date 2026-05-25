@@ -21,7 +21,7 @@ num_train_epochs: 1
 save_steps: 60
 max_grad_norm: 0.1
 report_to: "wandb"
-bf16: true
+fp16: true
 importance_sampling_level: "token"
 mask_truncated_completions: false
 loss_type: "dr_grpo"
