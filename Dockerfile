@@ -1,27 +1,3 @@
-# syntax=docker/dockerfile:1
-#
-# Training image for OmniBrowse (Unsloth + TRL GRPO/GSPO VLM RL training).
-# The training code is baked into the image — cloned from the private GitHub
-# repo at build time — so at runtime only the dataset needs to be provided.
-#
-# Build (BuildKit forwards your SSH agent so the private clone authenticates
-# without the key ever entering the image):
-#   eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519   # if not already loaded
-#   docker build --ssh default -t omnibrowse:latest .
-#   # rebuild against newer code — bump the ref (or add --no-cache):
-#   docker build --ssh default --build-arg OMNIBROWSE_REF=<branch|tag|sha> \
-#       -t omnibrowse:latest .
-#
-# Run (host needs the NVIDIA driver + nvidia-container-toolkit):
-#   docker run --gpus all -it --rm \
-#       -v /path/to/agentnet:/workspace/OmniBrowse/dataset/agentnet/data \
-#       -v $HOME/hf-cache:/workspace/hf-cache \
-#       -e WANDB_API_KEY=... \
-#       omnibrowse:latest \
-#       python train.py --experiment_name run1 \
-#           --model_config qwen3-vl-8b-4bit.yml --trainer_config gspo.yml \
-#           --rewards gui_r1 --s3_uri s3://your-bucket/omnibrowse-runs
-
 FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -57,6 +33,19 @@ WORKDIR /workspace/OmniBrowse
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --upgrade pip setuptools wheel && \
     python -m pip install -r requirements.txt
+
+# Pre-download the base model weights into the image's HF cache so the first
+# training run doesn't burn time pulling from the Hub. Defaults to just the 4B
+# variant to keep the image lean; override with
+# --build-arg PREFETCH_MODELS="<repo> [<repo> ...]" to pick a different one (or
+# multiple), or pass an empty string to skip prefetching entirely.
+ARG PREFETCH_MODELS="unsloth/Qwen3-VL-8B-Instruct-unsloth-bnb-4bit"
+RUN if [ -n "${PREFETCH_MODELS}" ]; then \
+        for repo in ${PREFETCH_MODELS}; do \
+            echo "Prefetching ${repo} into ${HF_HOME}" && \
+            python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='${repo}', repo_type='model')" || exit 1; \
+        done; \
+    fi
 
 # The ~305 GB AgentNet dataset is NOT baked in — at runtime mount it to
 # dataset/agentnet/data, or download it inside the container:

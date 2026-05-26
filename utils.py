@@ -43,3 +43,6 @@ def save_training_params(
 
     with open(f"{experiment_name}/configs/{trainer_config_path.split(os.sep)[-1]}", "w") as f:
         yaml.safe_dump(config, f)
+
+    with open(f"{experiment_name}/configs/prompt.txt", "w") as f:
+        f.write(base_prompt)

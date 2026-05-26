@@ -58,23 +58,27 @@ def train_vlm_rl(
         s3_callback = S3UploadCallback(s3_uri, experiment_name)
         trainer.callback_handler.callbacks.append(s3_callback)
 
+    # Save config copies before training so a crashed/interrupted run still
+    # leaves them behind (locally and on S3 if configured).
+    save_training_params(
+        base_prompt,
+        experiment_name,
+        model_config,
+        trainer_config,
+        rewards
+    )
+    print("💾 Saved copies of config files.")
+    if s3_callback is not None:
+        s3_callback.upload_now(f"{experiment_name}/configs", key_subprefix="configs")
+        print("☁️  Configs uploaded to S3.")
+
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     print("🏁 Training completed successfully!")
 
     # Local saving
-    model.save_pretrained(experiment_name) 
+    model.save_pretrained(experiment_name)
     tokenizer.save_pretrained(experiment_name)
     print(f"📁 Model and tokenizer saved to {experiment_name}!")
-
-    # Save copies of the config files used to output directory
-    save_training_params(
-        base_prompt,
-        experiment_name, 
-        model_config, 
-        trainer_config, 
-        rewards
-    )
-    print("💾 Saved copies of config files.")
 
     # Verify that the LoRA model was saved correctly    
     with safe_open(f"{experiment_name}/adapter_model.safetensors", framework = "pt") as f:

@@ -187,6 +187,14 @@ class S3UploadCallback(TrainerCallback):
         if os.path.isdir(ckpt):
             self._submit_tree(ckpt, f"{self.prefix}/checkpoint-{state.global_step}")
 
+    def upload_now(self, local_root: str, key_subprefix: str = "") -> None:
+        """Submit a tree and block until those specific uploads complete."""
+        key_prefix = self.prefix if not key_subprefix else f"{self.prefix}/{key_subprefix}"
+        before = len(self._futures)
+        self._submit_tree(local_root, key_prefix)
+        for f in self._futures[before:]:
+            f.result()
+
     def finish(self, local_dir: str) -> None:
         """Upload final top-level artifacts and block until every upload is done."""
         self._submit_tree(local_dir, self.prefix, skip_checkpoints=True)
