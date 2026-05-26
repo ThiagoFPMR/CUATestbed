@@ -18,7 +18,7 @@ num_generations: 4
 max_prompt_length: 4096
 max_completion_length: 1024
 num_train_epochs: 1
-save_steps: 60
+save_steps: 30
 max_grad_norm: 0.1
 report_to: "wandb"
 fp16: true
