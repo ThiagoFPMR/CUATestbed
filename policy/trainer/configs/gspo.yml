@@ -18,10 +18,10 @@ num_generations: 4
 max_prompt_length: 4096
 max_completion_length: 1024
 num_train_epochs: 1
-save_steps: 30
+save_steps: 60
 max_grad_norm: 0.1
 report_to: "wandb"
-fp16: true
+bf16: true
 importance_sampling_level: "sequence"
 mask_truncated_completions: false
 loss_type: "dr_grpo"

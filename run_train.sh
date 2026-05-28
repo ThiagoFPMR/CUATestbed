@@ -12,7 +12,7 @@
 #     -v omnibrowse-agentnet:/workspace/OmniBrowse/dataset/agentnet/data \
 #     -e WANDB_API_KEY -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
 #     -e AWS_DEFAULT_REGION \
-#     omnibrowse:latest ./run_train.sh
+#     omnibrowse:latest ./run_train.sh <experiment_name>
 #
 # The dataset volume is optional but recommended on expensive boxes so the
 # ~140GB pull only happens once. For quick tests, `python download.py --reduced`
@@ -27,10 +27,12 @@ set -euo pipefail
 : "${AWS_DEFAULT_REGION:=us-east-1}"
 export AWS_DEFAULT_REGION
 
+EXPERIMENT_NAME="${1:?set experiment name as the first argument: ./run_train.sh <experiment_name>}"
+
 python download.py --reduced
 python train.py \
-  --experiment_name io_test \
-  --model_config qwen3-vl-2b-4bit.yml \
+  --experiment_name "$EXPERIMENT_NAME" \
+  --model_config qwen3-vl-8b-4bit.yml \
   --trainer_config gspo.yml \
   --rewards gui_r1 \
   --s3_uri s3://omnibrowse-s3/runs
