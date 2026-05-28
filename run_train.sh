@@ -29,7 +29,7 @@ export AWS_DEFAULT_REGION
 
 EXPERIMENT_NAME="${1:?set experiment name as the first argument: ./run_train.sh <experiment_name>}"
 
-python download.py --reduced
+python download.py
 python train.py \
   --experiment_name "$EXPERIMENT_NAME" \
   --model_config qwen3-vl-8b-4bit.yml \
