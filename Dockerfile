@@ -4,10 +4,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/workspace/hf-cache
 
-# Python 3.12 (Ubuntu 22.04 ships 3.10), build tooling, git and the ssh client.
+# Python 3.12 (Ubuntu 22.04 ships 3.10), build tooling, git, ssh client, and
+# p7zip (download.py uses `7z` to extract the AgentNet split-zip image archives).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         software-properties-common ca-certificates curl git openssh-client \
-        build-essential && \
+        build-essential p7zip-full && \
     add-apt-repository -y ppa:deadsnakes/ppa && \
     apt-get update && apt-get install -y --no-install-recommends \
         python3.12 python3.12-dev && \
@@ -47,8 +48,7 @@ RUN if [ -n "${PREFETCH_MODELS}" ]; then \
         done; \
     fi
 
-# The ~305 GB AgentNet dataset is NOT baked in — at runtime mount it to
-# dataset/agentnet/data, or download it inside the container:
-#   huggingface-cli download xlangai/AgentNet --repo-type dataset \
-#       --local-dir dataset/agentnet/data
+# The AgentNet dataset is NOT baked in. Either mount a host copy to
+# dataset/agentnet/data, or let `python download.py` fetch + extract it at
+# runtime (uses hf_transfer + pipelined extraction; safe to re-run).
 CMD ["bash"]

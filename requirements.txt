@@ -6,3 +6,4 @@ matplotlib
 numpy
 boto3
 wandb
+hf_transfer
