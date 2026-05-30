@@ -20,6 +20,13 @@ Test flow:
       Pull and unpack that pre-built slice from S3 instead of doing the full HF
       download. Lands in the same dataset/agentnet/data/ layout so train.py
       doesn't need to know which mode produced it.
+
+Full-from-S3 flow (uncompressed):
+  python download.py --full-s3 [--s3-uri ...]
+      Pull the full dataset straight from S3 as loose, already-extracted files.
+      On machines where CPU-bound decompression is the bottleneck, this beats
+      the HF zip download + 7z extract. Lands in the same
+      dataset/agentnet/data/ layout. (The S3 copy is uploaded out-of-band.)
 """
 import argparse
 import json
@@ -29,6 +36,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -50,6 +58,7 @@ JSONL_FOR_SET = {
 }
 
 DEFAULT_REDUCED_S3_URI = "s3://omnibrowse-s3/datasets/agentnet-reduced"
+DEFAULT_FULL_S3_URI = "s3://omnibrowse-s3/datasets/agentnet-full"
 
 
 # ---------- full HF download ----------------------------------------------------
@@ -153,6 +162,15 @@ def _transfer_config():
         max_concurrency=16,
         use_threads=True,
     )
+
+
+def _loose_transfer_config():
+    # The full uncompressed dataset is hundreds of thousands of small PNGs.
+    # Per-file threading buys nothing for tiny objects and would explode the
+    # thread count under the outer pool, so transfer each file single-threaded
+    # and get parallelism purely from the outer ThreadPoolExecutor.
+    from boto3.s3.transfer import TransferConfig
+    return TransferConfig(use_threads=False)
 
 
 def _subset_jsonl(src: Path, dst: Path, n_trajs: int) -> list[str]:
@@ -285,6 +303,67 @@ def download_reduced(s3_uri: str) -> None:
     print(f"[done] reduced dataset ready at {DATA_DIR}", flush=True)
 
 
+# ---------- full slice, uncompressed (S3) ---------------------------------------
+
+
+def download_full_s3(s3_uri: str) -> None:
+    """Pull the full, already-extracted dataset from S3 as loose files.
+
+    Mirrors the on-disk layout one-to-one: each S3 key under the prefix maps to
+    DATA_DIR/<key-relative-to-prefix>. No tar/zip, so there's nothing to
+    decompress on arrival.
+    """
+    import boto3
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    bucket, prefix = _parse_s3_uri(s3_uri)
+    s3 = boto3.client("s3")
+    cfg = _loose_transfer_config()
+
+    paginator = s3.get_paginator("list_objects_v2")
+    objects: list[tuple[str, int]] = []
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix + "/"):
+        for obj in page.get("Contents", []):
+            objects.append((obj["Key"], obj["Size"]))
+
+    if not objects:
+        raise RuntimeError(
+            f"No objects under s3://{bucket}/{prefix}/. Upload the full "
+            "uncompressed dataset there first (done out-of-band)."
+        )
+
+    total = len(objects)
+    print(f"[download] {total} files from s3://{bucket}/{prefix}/", flush=True)
+    done = 0
+    lock = threading.Lock()
+
+    def _fetch(key: str, size: int) -> None:
+        nonlocal done
+        rel = key[len(prefix) + 1:]
+        if not rel:  # the prefix "directory" placeholder, if any
+            return
+        dest = DATA_DIR / rel
+        # Resume/idempotency: a same-size local file is assumed complete.
+        if dest.exists() and dest.stat().st_size == size:
+            pass
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            s3.download_file(bucket, key, str(dest), Config=cfg)
+        with lock:
+            done += 1
+            if done % 2000 == 0 or done == total:
+                print(f"[download] {done}/{total}", flush=True)
+
+    # Many small files: parallelism is latency-bound, so use a wide pool of
+    # single-threaded transfers rather than a few multi-threaded ones.
+    with ThreadPoolExecutor(max_workers=64) as ex:
+        futures = [ex.submit(_fetch, k, sz) for k, sz in objects]
+        for fut in as_completed(futures):
+            fut.result()
+
+    print(f"[done] full dataset ready at {DATA_DIR}", flush=True)
+
+
 # ---------- entry point ---------------------------------------------------------
 
 
@@ -301,10 +380,17 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Build a small slice from the local full dataset and upload it to S3.",
     )
+    mode.add_argument(
+        "--full-s3",
+        action="store_true",
+        help="Pull the full uncompressed dataset from S3 (loose files, no extract step).",
+    )
     p.add_argument(
         "--s3-uri",
-        default=DEFAULT_REDUCED_S3_URI,
-        help=f"S3 prefix for the reduced slice (default: {DEFAULT_REDUCED_S3_URI}).",
+        default=None,
+        help="S3 prefix override. Defaults to "
+        f"{DEFAULT_REDUCED_S3_URI} for --reduced/--make-reduced and "
+        f"{DEFAULT_FULL_S3_URI} for --full-s3.",
     )
     p.add_argument(
         "--n-trajs",
@@ -317,9 +403,11 @@ def _parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = _parse_args()
-    if args.make_reduced:
-        make_reduced(args.s3_uri, args.n_trajs)
+    if args.full_s3:
+        download_full_s3(args.s3_uri or DEFAULT_FULL_S3_URI)
+    elif args.make_reduced:
+        make_reduced(args.s3_uri or DEFAULT_REDUCED_S3_URI, args.n_trajs)
     elif args.reduced:
-        download_reduced(args.s3_uri)
+        download_reduced(args.s3_uri or DEFAULT_REDUCED_S3_URI)
     else:
         download_agentnet()

@@ -1,0 +1,43 @@
+# CPU-only data-prep image: download AgentNet from HF, extract it, and upload the
+# full uncompressed dataset to S3 as loose files (producer side of
+# `download.py --full-s3`). No CUDA/torch/unsloth — this never trains, so it
+# stays tiny and runs on the cheapest CPU box you can rent.
+#
+# Build (SSH agent must hold a key with read access to the private repo):
+#   DOCKER_BUILDKIT=1 docker build -f Dockerfile.dataprep --ssh default -t omnibrowse-dataprep:latest .
+#
+# Run (forward AWS creds; mount big ephemeral/scratch disk at the data dir):
+#   docker run --rm \
+#     -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_DEFAULT_REGION \
+#     -v /mnt/scratch:/workspace/OmniBrowse/dataset/agentnet/data \
+#     omnibrowse-dataprep:latest
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    HF_HUB_ENABLE_HF_TRANSFER=1 \
+    HF_HOME=/workspace/hf-cache
+
+# git/ssh to clone the private repo; p7zip for the split-zip extraction in
+# download.py; ca-certificates for HTTPS to the Hub and S3.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates git openssh-client p7zip-full && \
+    rm -rf /var/lib/apt/lists/*
+
+# Clone the code the same way the training image does: SSH agent forwarded via
+# BuildKit, no key baked into a layer. Bump the ref (or --no-cache) for newer code.
+ARG OMNIBROWSE_REF=train/reference-model
+RUN --mount=type=ssh \
+    mkdir -p -m 0700 ~/.ssh && \
+    ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null && \
+    git clone git@github.com:ThiagoFPMR/OmniBrowse.git /workspace/OmniBrowse && \
+    git -C /workspace/OmniBrowse checkout "${OMNIBROWSE_REF}"
+
+WORKDIR /workspace/OmniBrowse
+
+# Lean deps only: download (huggingface_hub + hf_transfer), upload (boto3).
+# Deliberately NOT requirements.txt, which drags in unsloth/torch/wandb.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install --upgrade pip && \
+    python -m pip install huggingface_hub hf_transfer boto3
+
+CMD ["bash", "run_dataprep.sh"]
