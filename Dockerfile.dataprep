@@ -3,8 +3,13 @@
 # `download.py --full-s3`). No CUDA/torch/unsloth — this never trains, so it
 # stays tiny and runs on the cheapest CPU box you can rent.
 #
-# Build (SSH agent must hold a key with read access to the private repo):
-#   DOCKER_BUILDKIT=1 docker build -f Dockerfile.dataprep --ssh default -t omnibrowse-dataprep:latest .
+# This image is intended to be published publicly (Docker Hub), so it only
+# contains the data-prep scripts — not the rest of the training code. The
+# corresponding `Dockerfile.dataprep.dockerignore` whitelists exactly the files
+# copied below.
+#
+# Build (no SSH agent / GitHub access required; just the local checkout):
+#   DOCKER_BUILDKIT=1 docker build -f Dockerfile.dataprep -t omnibrowse-dataprep:latest .
 #
 # Run (forward AWS creds; mount big ephemeral/scratch disk at the data dir):
 #   docker run --rm \
@@ -17,20 +22,11 @@ ENV PYTHONUNBUFFERED=1 \
     HF_HUB_ENABLE_HF_TRANSFER=1 \
     HF_HOME=/workspace/hf-cache
 
-# git/ssh to clone the private repo; p7zip for the split-zip extraction in
-# download.py; ca-certificates for HTTPS to the Hub and S3.
+# p7zip for the split-zip extraction in download.py; ca-certificates for HTTPS
+# to the Hub and S3.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates git openssh-client p7zip-full && \
+        ca-certificates p7zip-full && \
     rm -rf /var/lib/apt/lists/*
-
-# Clone the code the same way the training image does: SSH agent forwarded via
-# BuildKit, no key baked into a layer. Bump the ref (or --no-cache) for newer code.
-ARG OMNIBROWSE_REF=train/reference-model
-RUN --mount=type=ssh \
-    mkdir -p -m 0700 ~/.ssh && \
-    ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null && \
-    git clone git@github.com:ThiagoFPMR/OmniBrowse.git /workspace/OmniBrowse && \
-    git -C /workspace/OmniBrowse checkout "${OMNIBROWSE_REF}"
 
 WORKDIR /workspace/OmniBrowse
 
@@ -39,5 +35,10 @@ WORKDIR /workspace/OmniBrowse
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --upgrade pip && \
     python -m pip install huggingface_hub hf_transfer boto3
+
+# Ship only the data-prep code. The Dockerfile.dataprep.dockerignore whitelists
+# exactly these files so the build context stays small and nothing else from
+# the repo (training code, model configs, the cua/ venv) leaks into the image.
+COPY dataprep.py download.py run_dataprep.sh ./
 
 CMD ["bash", "run_dataprep.sh"]
