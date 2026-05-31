@@ -1,4 +1,7 @@
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+# CUDA 12.8 is the floor for NVIDIA Blackwell (B100/B200, RTX 50xx; sm_100/sm_120).
+# The cu128 toolchain + torch wheels below also cover Ampere/Hopper, so one image
+# runs on both old and new GPUs.
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -31,8 +34,16 @@ WORKDIR /workspace/OmniBrowse
 # unsloth pulls a CUDA build of torch plus transformers, trl, peft, datasets,
 # bitsandbytes and accelerate. torch wheels bundle their own CUDA/cuDNN runtime.
 # The pip cache mount keeps rebuilds fast even when the clone layer is busted.
+#
+# Install torch first from the cu128 wheel index so it carries Blackwell
+# (sm_100/sm_120) kernels; the default PyPI wheel may not. Pinning it up front
+# means the unsloth install below sees torch already satisfied and won't pull a
+# non-Blackwell build over it. Override TORCH_CUDA_CHANNEL to retarget the index.
+ARG TORCH_CUDA_CHANNEL=cu128
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --upgrade pip setuptools wheel && \
+    python -m pip install torch torchvision \
+        --index-url "https://download.pytorch.org/whl/${TORCH_CUDA_CHANNEL}" && \
     python -m pip install -r requirements.txt
 
 # Pre-download the base model weights into the image's HF cache so the first
