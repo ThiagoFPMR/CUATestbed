@@ -11,11 +11,60 @@ from utils import save_training_params
 from model import load_model_from_file
 from policy.rewards import parse_rewards
 from policy.trainer import load_trainer_from_file
-from callbacks import StepTimerCallback, CheckpointRetentionCallback, S3UploadCallback
+from callbacks import (
+    StepTimerCallback,
+    CheckpointRetentionCallback,
+    S3UploadCallback,
+    download_checkpoint_from_s3,
+)
+from transformers.trainer_utils import get_last_checkpoint
 
 from dataset.agentnet.agentnet import load_agentnet
 
 os.environ.setdefault("WANDB_PROJECT", "omnibrowse")
+
+
+def _resolve_resume_checkpoint(
+        resume: bool | str,
+        experiment_name: str,
+        s3_uri: str | None,
+) -> bool | str:
+    """
+    Turn `resume_from_checkpoint` into a concrete local checkpoint path, pulling
+    it from S3 when the requested checkpoint isn't on the (ephemeral) local disk.
+
+    - resume is a local dir that exists        -> use it as-is.
+    - resume is a "checkpoint-N" / step value  -> use local copy if present, else
+                                                  fetch that checkpoint from S3.
+    - resume is True (auto)                     -> prefer the latest local
+                                                  checkpoint, else the latest one
+                                                  on S3.
+    """
+    if isinstance(resume, str):
+        if os.path.isdir(resume):
+            return resume
+        name = resume if resume.startswith("checkpoint-") else f"checkpoint-{resume}"
+        local = os.path.join(experiment_name, name)
+        if os.path.isdir(local):
+            return local
+        if s3_uri:
+            got = download_checkpoint_from_s3(s3_uri, experiment_name, name)
+            if got:
+                return got
+        raise FileNotFoundError(
+            f"Checkpoint {resume!r} not found locally ({local}) or on S3 "
+            f"({s3_uri or 'no --s3_uri set'})."
+        )
+
+    # resume is True -> auto-detect.
+    local = get_last_checkpoint(experiment_name) if os.path.isdir(experiment_name) else None
+    if local:
+        return local
+    if s3_uri:
+        got = download_checkpoint_from_s3(s3_uri, experiment_name)
+        if got:
+            return got
+    return resume  # nothing to pull; let the trainer surface "no checkpoint" itself.
 
 
 def train_vlm_rl(
@@ -72,6 +121,12 @@ def train_vlm_rl(
         s3_callback.upload_now(f"{experiment_name}/configs", key_subprefix="configs")
         print("☁️  Configs uploaded to S3.")
 
+    if resume_from_checkpoint:
+        resume_from_checkpoint = _resolve_resume_checkpoint(
+            resume_from_checkpoint, experiment_name, s3_uri
+        )
+        print(f"↩️  Resuming from checkpoint: {resume_from_checkpoint}")
+
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     print("🏁 Training completed successfully!")
 
@@ -101,7 +156,7 @@ if __name__ == "__main__":
     parser.add_argument("--model_config", type=str, required=False, default="qwen3-vl-2b-4bit.yml", help="Path to the model configuration file.")
     parser.add_argument("--trainer_config", type=str, required=False, default="gspo.yml", help="Path to the trainer configuration file.")
     parser.add_argument("--rewards", type=str, nargs="+", required=False, default=["gui_r1"], help="List of reward function names.")
-    parser.add_argument("--resume_from_checkpoint", nargs="?", const=True, default=False, help="Resume training. Pass with no value to auto-detect the latest checkpoint in the experiment dir, or pass a path to a specific checkpoint.")
+    parser.add_argument("--resume_from_checkpoint", nargs="?", const=True, default=False, help="Resume training. Pass with no value to auto-detect the latest checkpoint (preferring a local one, else the latest on S3 if --s3_uri is set). Pass a local path, or a 'checkpoint-N' name / step to fetch that specific checkpoint from S3 when it isn't on local disk.")
     parser.add_argument("--s3_uri", type=str, required=False, default=None, help="If set (e.g. s3://bucket/prefix), mirror each checkpoint and the final artifacts to S3. For cloud boxes with ephemeral local storage.")
     args = parser.parse_args()
 

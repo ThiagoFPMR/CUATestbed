@@ -1,6 +1,7 @@
 """
 TrainerCallbacks for the VLM RL training loop.
 """
+import json
 import os
 import re
 import shutil
@@ -91,6 +92,7 @@ class CheckpointRetentionCallback(TrainerCallback):
     """
 
     CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
+    STATE_FILE = "retention_state.json"
 
     def __init__(self, n_ckpts: int = 10, metric_key: str = "reward"):
         self.n_ckpts = n_ckpts
@@ -100,6 +102,24 @@ class CheckpointRetentionCallback(TrainerCallback):
         self.metric_key = metric_key
         self._best_step: int | None = None
         self._best_value = float("-inf")
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        # On resume, the bucket cascade / best-tracking state lives in the
+        # resumed checkpoint dir (written by on_save below, and pulled back from
+        # S3 with the rest of the checkpoint). Restore it so retention continues
+        # exactly as if the run had never stopped instead of restarting from zero.
+        if not state.global_step:
+            return
+        path = os.path.join(args.output_dir, f"checkpoint-{state.global_step}", self.STATE_FILE)
+        if not os.path.exists(path):
+            return
+        with open(path) as f:
+            data = json.load(f)
+        self.counter = data["counter"]
+        self.buckets = data["buckets"]
+        self.latest = data["latest"]
+        self._best_step = data["best_step"]
+        self._best_value = data["best_value"]
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         if not logs or self.metric_key not in logs:
@@ -139,6 +159,92 @@ class CheckpointRetentionCallback(TrainerCallback):
             step = int(m.group(1))
             if step not in keep_steps:
                 shutil.rmtree(os.path.join(args.output_dir, name), ignore_errors=True)
+
+        # Persist retention state inside the just-saved checkpoint so a later
+        # resume (local or from S3) can pick the cascade back up. Runs before
+        # S3UploadCallback.on_save, so the file is included in the upload.
+        ckpt_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+        if os.path.isdir(ckpt_dir):
+            with open(os.path.join(ckpt_dir, self.STATE_FILE), "w") as f:
+                json.dump(
+                    {
+                        "counter": self.counter,
+                        "buckets": self.buckets,
+                        "latest": self.latest,
+                        "best_step": self._best_step,
+                        "best_value": self._best_value,
+                    },
+                    f,
+                )
+
+
+def _parse_s3_prefix(s3_uri: str, experiment_name: str) -> tuple[str, str]:
+    """Resolve (bucket, prefix) for an experiment, matching S3UploadCallback's layout."""
+    parsed = urlparse(s3_uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError(f"--s3_uri must look like s3://bucket/prefix, got: {s3_uri}")
+    base = parsed.path.strip("/")
+    prefix = f"{base}/{experiment_name}".strip("/")
+    return parsed.netloc, prefix
+
+
+def download_checkpoint_from_s3(
+    s3_uri: str,
+    experiment_name: str,
+    checkpoint: str | None = None,
+    max_workers: int = 8,
+) -> str | None:
+    """
+    Pull a checkpoint dir from S3 into the local experiment dir so training can
+    resume from it (for cloud boxes whose local checkpoints are ephemeral).
+
+    `checkpoint` is a name like "checkpoint-500"; pass None to pick the
+    highest-step checkpoint present under the experiment's S3 prefix. Files land
+    at `<experiment_name>/<checkpoint>/...`, mirroring the upload layout.
+
+    Returns the local checkpoint path, or None if no matching checkpoint exists
+    on S3.
+    """
+    import boto3  # lazy: only required when --s3_uri is passed
+
+    bucket, prefix = _parse_s3_prefix(s3_uri, experiment_name)
+    client = boto3.client("s3")
+    paginator = client.get_paginator("list_objects_v2")
+
+    if checkpoint is None:
+        steps: dict[int, str] = {}
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix + "/", Delimiter="/"):
+            for cp in page.get("CommonPrefixes", []):
+                name = cp["Prefix"].rstrip("/").rsplit("/", 1)[-1]
+                m = re.match(r"checkpoint-(\d+)$", name)
+                if m:
+                    steps[int(m.group(1))] = name
+        if not steps:
+            return None
+        checkpoint = steps[max(steps)]
+
+    ckpt_prefix = f"{prefix}/{checkpoint}"
+    keys = [
+        obj["Key"]
+        for page in paginator.paginate(Bucket=bucket, Prefix=ckpt_prefix + "/")
+        for obj in page.get("Contents", [])
+    ]
+    if not keys:
+        return None
+
+    local_ckpt = os.path.join(experiment_name, checkpoint)
+
+    def _fetch(key: str) -> None:
+        rel = key[len(prefix) + 1:]  # "checkpoint-N/<file>"
+        dest = os.path.join(experiment_name, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        client.download_file(bucket, key, dest)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for fut in [ex.submit(_fetch, k) for k in keys]:
+            fut.result()
+
+    return local_ckpt
 
 
 class S3UploadCallback(TrainerCallback):
