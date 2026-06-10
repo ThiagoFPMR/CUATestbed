@@ -13,6 +13,7 @@ import torch
 from transformers import TrainerCallback
 
 from dataset.agentnet import agentnet as agentnet_module
+from policy.rewards import logging_rewards
 
 
 class StepTimerCallback(TrainerCallback):
@@ -80,6 +81,56 @@ class StepTimerCallback(TrainerCallback):
             agentnet_module.LAST_DATA_LOAD_TIMES = []
 
 
+class GenerationLoggingCallback(TrainerCallback):
+    """
+    Persist a sample of the model's generations during training, picking only
+    the best route per step (highest combined GUI-R1 reward of the GRPO group).
+
+    Two cadences, written under ``{output_dir}/generation_logs/``:
+      - ``predicted_actions.log``: best route's predicted action vs ground truth,
+        every ``pred_action_every`` steps. Cheap, dense — for eyeballing
+        grounding/accuracy drift.
+      - ``full_outputs.log``: the best route's entire raw completion (observation
+        + reason + answer) plus the ground-truth label, every
+        ``full_output_every`` steps. Verbose — for inspecting full behavior.
+
+    Generations are captured by ``generation_logging_reward_func`` (a neutral
+    reward func) into ``logging_rewards.PENDING_BEST``; this callback drains it.
+    """
+
+    def __init__(self, pred_action_every: int = 5, full_output_every: int = 60):
+        self.pred_action_every = pred_action_every
+        self.full_output_every = full_output_every
+        self._log_dir = None
+
+    def _ensure_dir(self, args):
+        if self._log_dir is None:
+            self._log_dir = os.path.join(args.output_dir, "generation_logs")
+            os.makedirs(self._log_dir, exist_ok=True)
+        return self._log_dir
+
+    def on_step_end(self, args, state, control, **kwargs):
+        record = logging_rewards.PENDING_BEST
+        logging_rewards.PENDING_BEST = None  # drain regardless, so it can't go stale
+        if record is None:
+            return
+
+        step = state.global_step
+        want_pred = self.pred_action_every > 0 and step % self.pred_action_every == 0
+        want_full = self.full_output_every > 0 and step % self.full_output_every == 0
+        if not (want_pred or want_full):
+            return
+
+        full_entry, pred_entry = logging_rewards.format_best_record(record, step)
+        log_dir = self._ensure_dir(args)
+        if want_pred:
+            with open(os.path.join(log_dir, "predicted_actions.log"), "a") as f:
+                f.write(pred_entry)
+        if want_full:
+            with open(os.path.join(log_dir, "full_outputs.log"), "a") as f:
+                f.write(full_entry)
+
+
 class CheckpointRetentionCallback(TrainerCallback):
     """
     Retain checkpoints at exponentially-spaced offsets from the latest via a
@@ -89,10 +140,17 @@ class CheckpointRetentionCallback(TrainerCallback):
     the latest. Counter resets after 2^n_ckpts saves.
 
     Total retained: up to n_ckpts + 2 (buckets + latest + best).
+
+    State (counter/buckets/best) is the running memory of the cascade. The HF
+    Trainer does not persist callback attributes across a resume, so we write
+    them into each checkpoint dir as ``retention_state.json`` on save and reload
+    them in ``on_train_begin``. Runs that predate this persistence can be
+    backfilled offline by replaying the cascade — see
+    ``backfill_retention_state.py``.
     """
 
     CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
-    STATE_FILE = "retention_state.json"
+    STATE_FILENAME = "retention_state.json"
 
     def __init__(self, n_ckpts: int = 10, metric_key: str = "reward"):
         self.n_ckpts = n_ckpts
@@ -102,32 +160,60 @@ class CheckpointRetentionCallback(TrainerCallback):
         self.metric_key = metric_key
         self._best_step: int | None = None
         self._best_value = float("-inf")
+        self._last_metric: float | None = None
 
     def on_train_begin(self, args, state, control, **kwargs):
-        # On resume, the bucket cascade / best-tracking state lives in the
-        # resumed checkpoint dir (written by on_save below, and pulled back from
-        # S3 with the rest of the checkpoint). Restore it so retention continues
-        # exactly as if the run had never stopped instead of restarting from zero.
+        # Fresh run (global_step==0) → nothing to restore. On resume, reload the
+        # state stashed inside the checkpoint we're resuming from.
         if not state.global_step:
             return
-        path = os.path.join(args.output_dir, f"checkpoint-{state.global_step}", self.STATE_FILE)
+        path = os.path.join(
+            args.output_dir, f"checkpoint-{state.global_step}", self.STATE_FILENAME
+        )
         if not os.path.exists(path):
+            print(
+                f"⚠️  CheckpointRetentionCallback: no {self.STATE_FILENAME} in "
+                f"checkpoint-{state.global_step}; retention history starts blank, so "
+                f"the next save may prune pre-existing checkpoints. Backfill with "
+                f"backfill_retention_state.py to avoid this."
+            )
             return
         with open(path) as f:
             data = json.load(f)
+        if data.get("n_ckpts") != self.n_ckpts:
+            print(
+                f"⚠️  CheckpointRetentionCallback: saved n_ckpts={data.get('n_ckpts')} "
+                f"!= configured n_ckpts={self.n_ckpts}; ignoring stored state."
+            )
+            return
         self.counter = data["counter"]
         self.buckets = data["buckets"]
         self.latest = data["latest"]
-        self._best_step = data["best_step"]
-        self._best_value = data["best_value"]
+        self._best_step = data.get("best_step")
+        best_value = data.get("best_value")
+        self._best_value = best_value if best_value is not None else float("-inf")
+
+    def _save_state(self, args) -> None:
+        ckpt_dir = os.path.join(args.output_dir, f"checkpoint-{self.latest}")
+        if not os.path.isdir(ckpt_dir):
+            return
+        state = {
+            "n_ckpts": self.n_ckpts,
+            "counter": self.counter,
+            "buckets": self.buckets,
+            "latest": self.latest,
+            "best_step": self._best_step,
+            "best_value": self._best_value if self._best_step is not None else None,
+        }
+        with open(os.path.join(ckpt_dir, self.STATE_FILENAME), "w") as f:
+            json.dump(state, f)
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if not logs or self.metric_key not in logs:
-            return
-        value = logs[self.metric_key]
-        if value > self._best_value:
-            self._best_value = value
-            self._best_step = state.global_step
+        # Cache the most recent metric value only. "Best" is decided at save time
+        # against actual checkpoints — tracking it over every logged step would
+        # pin best_step to a non-save step that can never be retained.
+        if logs and self.metric_key in logs:
+            self._last_metric = logs[self.metric_key]
 
     def on_save(self, args, state, control, **kwargs):
         self.counter += 1
@@ -147,6 +233,15 @@ class CheckpointRetentionCallback(TrainerCallback):
 
         self.latest = state.global_step
 
+        # Update "best" only here, so best_step is always a real checkpoint. HF
+        # logs (on_log) before it saves within a step, so _last_metric holds this
+        # step's metric by now (given logging aligns with this save step).
+        # Use >= so that among checkpoints tied at the max (reward is bounded at
+        # 1 and plateaus there), best advances to the latest, more-trained one.
+        if self._last_metric is not None and self._last_metric >= self._best_value:
+            self._best_value = self._last_metric
+            self._best_step = self.latest
+
         keep_steps = {self.latest}
         keep_steps.update(s for s in self.buckets if s is not None)
         if self._best_step is not None:
@@ -160,22 +255,9 @@ class CheckpointRetentionCallback(TrainerCallback):
             if step not in keep_steps:
                 shutil.rmtree(os.path.join(args.output_dir, name), ignore_errors=True)
 
-        # Persist retention state inside the just-saved checkpoint so a later
-        # resume (local or from S3) can pick the cascade back up. Runs before
-        # S3UploadCallback.on_save, so the file is included in the upload.
-        ckpt_dir = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
-        if os.path.isdir(ckpt_dir):
-            with open(os.path.join(ckpt_dir, self.STATE_FILE), "w") as f:
-                json.dump(
-                    {
-                        "counter": self.counter,
-                        "buckets": self.buckets,
-                        "latest": self.latest,
-                        "best_step": self._best_step,
-                        "best_value": self._best_value,
-                    },
-                    f,
-                )
+        # Persist the post-save state into the surviving latest checkpoint so a
+        # resume can restore it (HF doesn't serialize callback attributes).
+        self._save_state(args)
 
 
 def _parse_s3_prefix(s3_uri: str, experiment_name: str) -> tuple[str, str]:

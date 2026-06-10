@@ -10,9 +10,11 @@ from safetensors import safe_open
 from utils import save_training_params
 from model import load_model_from_file
 from policy.rewards import parse_rewards
+from policy.rewards.logging_rewards import generation_logging_reward_func
 from policy.trainer import load_trainer_from_file
 from callbacks import (
     StepTimerCallback,
+    GenerationLoggingCallback,
     CheckpointRetentionCallback,
     S3UploadCallback,
     download_checkpoint_from_s3,
@@ -90,16 +92,22 @@ def train_vlm_rl(
     model, tokenizer = load_model_from_file(model_config)
 
     train_dataset = load_agentnet(base_prompt, history_length=12)
+    
+    reward_funcs = parse_rewards(rewards)
+    reward_funcs.append(generation_logging_reward_func)
 
     trainer = load_trainer_from_file(trainer_config, run_name=experiment_name, output_dir=experiment_name)(
         model = model,
-        reward_funcs = parse_rewards(rewards),
+        reward_funcs = reward_funcs,
         processing_class = tokenizer,
         train_dataset = train_dataset,
     )
     # Insert at the front so our additions to the log dict run BEFORE PrinterCallback
     # and WandbCallback consume it.
     trainer.callback_handler.callbacks.insert(0, StepTimerCallback())
+    trainer.callback_handler.callbacks.append(
+        GenerationLoggingCallback(pred_action_every=5, full_output_every=60)
+    )
     trainer.callback_handler.callbacks.append(CheckpointRetentionCallback(n_ckpts=10))
 
     s3_callback = None
