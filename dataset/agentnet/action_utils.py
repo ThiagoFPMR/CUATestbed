@@ -37,9 +37,17 @@ def verify_action_code(code: str) -> bool:
         bool: True if the action code is valid, False otherwise.
     """
     for action_code in code.split("\n"):
-        action_code = action_code.split(".")[1]
+        action_code = action_code.strip()
+        # Skip blank lines (e.g. trailing newline in the code block)
+        if not action_code:
+            continue
+        # A valid action line must carry the module prefix (e.g. 'pyautogui.click(...)')
+        if "." not in action_code:
+            return False
+        # Split only on the first dot so decimal coordinates are preserved
+        action_code = action_code.split(".", 1)[1]
         action_type = action_code.split("(")[0]
-        
+
         pattern = ACTION_PATTERNS.get(action_type)
 
         if not pattern:
@@ -53,17 +61,23 @@ def get_actions_from_step(code: str) -> str:
     """Extract the action from a step's code."""
     actions = "["
     for action_code in code.split("\n"):
-        action_code = action_code.split(".")[1]
+        action_code = action_code.strip()
+        if not action_code or "." not in action_code:
+            continue
+        # Split only on the first dot so decimal coordinates are preserved
+        action_code = action_code.split(".", 1)[1]
         if action_code == "terminate(status='fail')":
             action_code ="terminate(status='failure')"
         actions += f"{action_code}, "
     actions = actions.rstrip(", ") + "]"
     return actions
 
-def labels_from_code(code: str) -> dict:
+def labels_from_code(code: str) -> list:
     """Converts a block of action code into a list of label dictionaries for each action."""
     labels = []
     for action_code in code.split("\n"):
+        if not action_code.strip():
+            continue
         label = parse_action_arguments(action_code)
         if label:
             labels.append(label)
@@ -81,10 +95,13 @@ def parse_action_arguments(action_code: str) -> dict:
         dict: A dictionary containing the action name and its arguments.
     """
     try:
-        # Remove any module prefix if present (e.g., 'pyautogui.click' -> 'click')
-        if "." in action_code:
+        action_code = action_code.strip()
+        # Remove any module prefix if present (e.g., 'pyautogui.click' -> 'click').
+        # Only strip when the dot precedes the call parens, so decimal arguments
+        # (e.g. 'click(x=0.5, y=0.5)') are never truncated.
+        if "." in action_code.split("(", 1)[0]:
             action_code = action_code.split(".", 1)[1]
-            
+
         tree = ast.parse(action_code.strip(), mode='eval').body
         if not isinstance(tree, ast.Call):
             return {}

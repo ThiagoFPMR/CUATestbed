@@ -49,7 +49,7 @@ def filter_step(step_idx: int, trajectory: dict, min_instruction_len: int = 10) 
 
     # Filter for incomplete trajectories
     code = steps[step_idx]["value"]["code"]
-    action_type = code.split(".")[1].split("(")[0]
+    action_type = code.split(".", 1)[1].split("(")[0]
     if trajectory.get("task_completed", True) is False:
         # Don't add the "terminate" action
         if action_type == "terminate":
@@ -113,7 +113,7 @@ def conversation_from_step(
                 ]
             })
 
-        action_codes = [line.split(".")[1] for line in code.strip().split("\n") if line.strip()]
+        action_codes = [line.split(".", 1)[1] for line in code.strip().split("\n") if line.strip()]
         action_codes = [
             "terminate(status='failure')" if ac == "terminate(status='fail')" else ac
             for ac in action_codes
