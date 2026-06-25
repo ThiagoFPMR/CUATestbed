@@ -1,5 +1,5 @@
-# This image is built entirely from a git clone inside the Dockerfile — nothing
-# is copied from the build context. Ignore everything so `docker build` sends an
-# empty context instead of scanning/uploading the local tree (which includes the
-# ~305 GB dataset and the cua/ virtualenv).
+# The main Dockerfile builds entirely from a git clone — nothing is copied from
+# the build context — so ignore everything to avoid scanning/uploading the local
+# tree (the ~305 GB dataset and the cua/ virtualenv). Re-include only the few
+# files Dockerfile.dataprep COPYs from the context.
 *

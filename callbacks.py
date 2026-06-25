@@ -331,17 +331,25 @@ def download_checkpoint_from_s3(
 
 class S3UploadCallback(TrainerCallback):
     """
-    Mirror each checkpoint to S3 as it is written, via a background thread pool
-    so training never blocks on network I/O. Intended for cloud boxes with
-    ephemeral local storage. After training, call `finish()` to push the final
-    top-level artifacts (adapter, tokenizer, config copies) and block until
-    every upload has completed.
+    Mirror checkpoints to S3 via a background thread pool so training never
+    blocks on network I/O. After training, call `finish()` to push the final
+    top-level artifacts (adapter, tokenizer, config copies, generation logs) and
+    block until every upload has completed.
+
+    `upload_every` throttles the S3 mirror: only every Nth checkpoint save is
+    pushed (default 1 = every save). Local checkpoints are written every save
+    regardless — this just lowers the S3 backup cadence, which is all you need
+    when the canonical copy lives on a persistent network volume. On each S3 sync
+    the `generation_logs/` dir is mirrored too (append-only files re-uploaded
+    whole, so S3 holds the latest). `finish()` always pushes a final complete
+    copy regardless of the cadence, so the end state on S3 is never partial.
 
     Uploads are additive — nothing is deleted from S3 — so the local
     CheckpointRetentionCallback's pruning does not propagate to the bucket.
     """
 
-    def __init__(self, s3_uri: str, experiment_name: str, max_workers: int = 4):
+    def __init__(self, s3_uri: str, experiment_name: str, max_workers: int = 4,
+                 upload_every: int = 1):
         import boto3  # lazy: only required when --s3_uri is passed
 
         parsed = urlparse(s3_uri)
@@ -350,6 +358,8 @@ class S3UploadCallback(TrainerCallback):
         self.bucket = parsed.netloc
         base = parsed.path.strip("/")
         self.prefix = f"{base}/{experiment_name}".strip("/")
+        self.upload_every = max(1, upload_every)
+        self._save_count = 0
         self._client = boto3.client("s3")
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._futures: list = []
@@ -371,9 +381,20 @@ class S3UploadCallback(TrainerCallback):
                 self._futures.append(self._executor.submit(self._upload_file, local_path, key))
 
     def on_save(self, args, state, control, **kwargs):
+        # Throttle the S3 mirror: the checkpoint is already on the (persistent)
+        # local volume every save; only back a subset up to S3.
+        self._save_count += 1
+        if self._save_count % self.upload_every != 0:
+            return
+
         ckpt = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
         if os.path.isdir(ckpt):
             self._submit_tree(ckpt, f"{self.prefix}/checkpoint-{state.global_step}")
+        # Mirror the generation logs alongside this checkpoint so the S3 backup
+        # carries them too (they otherwise only reach S3 at finish()).
+        gen_logs = os.path.join(args.output_dir, "generation_logs")
+        if os.path.isdir(gen_logs):
+            self._submit_tree(gen_logs, f"{self.prefix}/generation_logs")
 
     def upload_now(self, local_root: str, key_subprefix: str = "") -> None:
         """Submit a tree and block until those specific uploads complete."""

@@ -135,6 +135,8 @@ celerybeat.pid
 
 # Environments
 .env
+# Local secret-bearing helper (WANDB / AWS keys); forwarded at runtime, never committed.
+export.sh
 .venv
 env/
 venv/

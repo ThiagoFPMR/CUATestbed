@@ -7,7 +7,7 @@ learning_rate: 5e-6
 adam_beta1: 0.9
 adam_beta2: 0.99
 weight_decay: 0.01
-warmup_ratio: 0.1
+warmup_ratio: 0.02
 lr_scheduler_type: "cosine"
 optim: "adamw_8bit"
 logging_steps: 1
@@ -15,10 +15,16 @@ log_completions: false
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 4
 num_generations: 4
+# vLLM-accelerated generation. The vLLM engine is created by Unsloth at model
+# load (model config use_vllm/gpu_memory_utilization); "colocate" makes TRL reuse
+# that in-process engine instead of spawning a separate vLLM server. One engine
+# per training process, so this is the mode that works under multi-GPU DDP.
+use_vllm: true
+vllm_mode: "colocate"
 max_prompt_length: 4096
 max_completion_length: 1024
 num_train_epochs: 1
-save_steps: 60
+save_steps: 120
 max_grad_norm: 0.1
 report_to: "wandb"
 bf16: true

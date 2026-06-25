@@ -22,6 +22,7 @@ from callbacks import (
 from transformers.trainer_utils import get_last_checkpoint
 
 from dataset.agentnet.agentnet import load_agentnet
+from prompts import base_prompt
 
 os.environ.setdefault("WANDB_PROJECT", "omnibrowse")
 
@@ -69,6 +70,52 @@ def _resolve_resume_checkpoint(
     return resume  # nothing to pull; let the trainer surface "no checkpoint" itself.
 
 
+def _terminate_pod(reason: str) -> None:
+    """Terminate this RunPod pod to stop compute billing. Opt-in via env.
+
+    Guard rail for ephemeral cloud boxes: a crashed/finished container does NOT
+    stop billing on its own -- only terminating the *pod* does. Gated on
+    RUNPOD_API_KEY (pass as a pod secret); RUNPOD_POD_ID is injected by RunPod.
+    Checkpoints live on S3 (S3UploadCallback), so killing the pod is safe -- a
+    fresh pod resumes from the latest S3 checkpoint.
+
+    Uses the REST API (DELETE /v1/pods/{id}, Bearer auth). The legacy GraphQL
+    endpoint with `?api_key=` is now rejected with 403, which is what bit the
+    prep scripts. Best-effort: on any failure we log loudly and leave the pod up
+    rather than risk a wrongly-killed box (a stuck pod is recoverable by hand).
+    """
+    api_key = os.environ.get("RUNPOD_API_KEY")
+    pod_id = os.environ.get("RUNPOD_POD_ID")
+    if not api_key:
+        print("[shutdown] RUNPOD_API_KEY not set; leaving pod up. Stop it manually "
+              "to halt billing.", flush=True)
+        return
+    if not pod_id:
+        print("[shutdown] RUNPOD_POD_ID not set (not on a RunPod pod?); cannot "
+              "self-terminate. Stop the pod manually!", flush=True)
+        return
+
+    import urllib.request
+    import urllib.error
+
+    req = urllib.request.Request(
+        f"https://rest.runpod.io/v1/pods/{pod_id}",
+        headers={"Authorization": f"Bearer {api_key}"},
+        method="DELETE",
+    )
+    print(f"[shutdown] {reason}: terminating pod {pod_id} to stop billing...", flush=True)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            print(f"[shutdown] runpod api -> {r.status} {r.read().decode()[:200]}", flush=True)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:200] if hasattr(e, "read") else ""
+        print(f"[shutdown] terminate request failed: HTTP {e.code} {body!r}. "
+              "Stop the pod manually!", flush=True)
+    except Exception as e:
+        print(f"[shutdown] terminate request failed: {e!r}. Stop the pod manually!",
+              flush=True)
+
+
 def train_vlm_rl(
         base_prompt: str,
         experiment_name: str,
@@ -77,6 +124,7 @@ def train_vlm_rl(
         rewards: list[str],
         resume_from_checkpoint: bool | str = False,
         s3_uri: str | None = None,
+        s3_upload_every: int = 10,
 ) -> None:
     """
     Train a vision-language model using reinforcement learning.
@@ -87,6 +135,7 @@ def train_vlm_rl(
         trainer_config (str): Path to the trainer configuration file. If does not contain /, it is assumed to be in the trainer configs directory.
         output_dir (str): Directory to save the trained model.
         s3_uri (str | None): If set (e.g. s3://bucket/prefix), mirror checkpoints and final artifacts to S3.
+        s3_upload_every (int): Push to S3 only every Nth checkpoint save (default 1). Local saves are unaffected; use >1 to lower the S3 backup cadence when checkpoints already persist on a network volume.
     """
     torch.cuda.empty_cache()
     model, tokenizer = load_model_from_file(model_config)
@@ -106,13 +155,13 @@ def train_vlm_rl(
     # and WandbCallback consume it.
     trainer.callback_handler.callbacks.insert(0, StepTimerCallback())
     trainer.callback_handler.callbacks.append(
-        GenerationLoggingCallback(pred_action_every=5, full_output_every=60)
+        GenerationLoggingCallback(pred_action_every=10, full_output_every=60)
     )
     trainer.callback_handler.callbacks.append(CheckpointRetentionCallback(n_ckpts=10))
 
     s3_callback = None
     if s3_uri:
-        s3_callback = S3UploadCallback(s3_uri, experiment_name)
+        s3_callback = S3UploadCallback(s3_uri, experiment_name, upload_every=s3_upload_every)
         trainer.callback_handler.callbacks.append(s3_callback)
 
     # Save config copies before training so a crashed/interrupted run still
@@ -165,75 +214,16 @@ if __name__ == "__main__":
     parser.add_argument("--trainer_config", type=str, required=False, default="gspo.yml", help="Path to the trainer configuration file.")
     parser.add_argument("--rewards", type=str, nargs="+", required=False, default=["gui_r1"], help="List of reward function names.")
     parser.add_argument("--resume_from_checkpoint", nargs="?", const=True, default=False, help="Resume training. Pass with no value to auto-detect the latest checkpoint (preferring a local one, else the latest on S3 if --s3_uri is set). Pass a local path, or a 'checkpoint-N' name / step to fetch that specific checkpoint from S3 when it isn't on local disk.")
-    parser.add_argument("--s3_uri", type=str, required=False, default=None, help="If set (e.g. s3://bucket/prefix), mirror each checkpoint and the final artifacts to S3. For cloud boxes with ephemeral local storage.")
+    parser.add_argument("--s3_uri", type=str, required=False, default=None, help="If set (e.g. s3://bucket/prefix), mirror checkpoints and the final artifacts to S3. For cloud boxes with ephemeral local storage.")
+    parser.add_argument("--s3_upload_every", type=int, required=False, default=1, help="Mirror to S3 only every Nth checkpoint save (default 1 = every save). Local checkpoints are always written; raise this to lower the S3 backup cadence when checkpoints persist on a network volume. Each S3 sync also includes the generation_logs.")
     args = parser.parse_args()
 
-    base_prompt = (
-        "You are a desktop GUI agent. Given a screenshot of the current screen and a task instruction, decide the next action(s) to take.\n\n"
-        "## Conversation history format\n"
-        "Earlier turns are a log of what has already been done. They appear in three tiers, from newest to oldest:\n"
-        "- Most recent prior step: the screenshot is shown directly as an image, followed by a text <observation> of that screen and a bare action list.\n"
-        "- The two steps before that: a text <observation> describing the screen state at that point, followed by a bare action list. No screenshot.\n"
-        "- All older steps: only a bare action list — no observation and no screenshot. Treat these as a trail of actions already attempted, not as a reconstruction of past screens.\n"
-        "YOUR own reply must NOT use any of these compact formats; it must follow the full format below.\n\n"
-        "## Output format — your response must follow this exactly\n"
-        "Begin with <observation>, then <reason>, then <answer>, and STOP. No preamble. No text after </answer>.\n\n"
-        "Skeleton:\n"
-        "<observation>OBSERVATION</observation> <reason>REASONING</reason> <answer>[{'description': 'DESCRIPTION', 'action': 'ACTION_CALL'}]</answer>\n\n"
-        "Where:\n"
-        "- OBSERVATION: a concise description of the current screen state — what application is open, what is visible, where the cursor/focus appears to be, any notable UI elements. Two to four sentences. This is your grounding step before reasoning.\n"
-        "- REASONING: a structured analysis (see 'How to reason' below). Keep it focused and write in the first person.\n"
-        "- The <answer> body is a Python list literal of dicts. Each dict MUST have BOTH keys:\n"
-        "    'description' — a short natural-language summary of what this action does and why. Refer to the target by its visible name, label, or distinguishing features (shape, color, position) — NOT by coordinates. For window controls, identify them correctly: minimize is '—', maximize is '□', close is 'X'. If a UI element's name is in a non-English language, keep the original language.\n"
-        "    'action'      — a single action call string from the table below, in the exact syntax shown.\n"
-        "- You MAY emit multiple action dicts in the list if several actions should fire in sequence at this step (e.g. write then press enter, or consolidated repeated keypresses). Most steps are a single action — don't pad. Prefer consolidating repetitive keypresses using the 'presses' kwarg (e.g. press('backspace', presses=5)) over emitting five separate dicts.\n"
-        "- Quoting: write each 'action' value as a DOUBLE-quoted Python string so any single quotes inside (e.g. press('enter')) are valid. Example: 'action': \"press('enter')\". Never write 'action': 'press('enter')' — that is a syntax error.\n"
-        "- Coordinates x and y are NORMALIZED FLOATS in [0.0, 1.0] — never raw pixel values. Always include a leading 0 (write 0.5, not .5).\n"
-        "- Use ONLY the actions in the table below, with their exact argument syntax. Do NOT invent actions like type(...), execute(...), or bare shell commands.\n\n"
-        "## How to reason — what goes inside <reason>...</reason>\n"
-        "Structure your reasoning around two phases. You do not need literal headers, but every reply should cover both:\n\n"
-        "1. Progress assessment — look backward:\n"
-        "   - What parts of the overall task are already done, based on the prior action log and the current screenshot?\n"
-        "   - Did the previous action produce the expected result? Look for unexpected dialogs, error states, unchanged screens, or focus loss.\n"
-        "   - If the previous action appears to have failed or led somewhere wrong, name the recovery step (dismiss the dialog, undo, retry with a different target, etc.) instead of plowing ahead.\n\n"
-        "2. Next-action analysis — look forward:\n"
-        "   - Briefly consider the plausible next actions given the current screen state.\n"
-        "   - Pick the most logical one and say why it beats the alternatives (e.g. keyboard shortcut vs. menu navigation, direct click vs. scrolling first).\n"
-        "   - Anticipate what the screen should look like after the action — this becomes the check on the next turn.\n\n"
-        "Special case — text input actions:\n"
-        "   - Note where the cursor currently is and whether the intended field is actually focused (don't assume).\n"
-        "   - State the expected final text in the field after typing.\n"
-        "   - Consolidate repeated keypresses with the 'presses' kwarg rather than repeating dicts.\n\n"
-        "Special case — terminating:\n"
-        "   - Only call terminate(status='success') when the screenshot itself confirms the task's end state. Do not terminate optimistically.\n"
-        "   - Call terminate(status='failure') when you have exhausted reasonable approaches or the task is genuinely blocked, and explain why in the reasoning.\n\n"
-        "## Available actions\n"
-        "Pointer actions — kwargs x, y as floats in [0.0, 1.0]:\n"
-        "  click(x=0.5, y=0.3)                       left-click at the given point\n"
-        "  rightClick(x=0.5, y=0.3)                  right-click\n"
-        "  doubleClick(x=0.5, y=0.3)                 double-click\n"
-        "  tripleClick(x=0.5, y=0.3)                 triple-click (e.g. select a line of text)\n"
-        "  middleClick(x=0.5, y=0.3)                 middle-click\n"
-        "  moveTo(x=0.5, y=0.3)                      move the cursor without clicking\n"
-        "  dragTo(x=0.5, y=0.3, button='left')       drag to the point; button is one of 'left' | 'right' | 'middle'\n\n"
-        "Scrolling — a single positional INTEGER (no decimals, no kwargs); positive = down/right, negative = up/left:\n"
-        "  scroll(-3)                                vertical scroll\n"
-        "  hscroll(2)                                horizontal scroll\n\n"
-        "Keyboard:\n"
-        "  write(message='hello world')              type literal text into the focused field (kwarg 'message'; do NOT use type())\n"
-        "  press('enter')                            press a single key by name\n"
-        "  press('a', presses=3)                     press a key multiple times (optional kwarg) — prefer this over repeating dicts\n"
-        "  press(['tab', 'tab'])                     press a sequence of keys, in order\n"
-        "  hotkey(['ctrl', 'c'])                     hold a chord of keys simultaneously\n\n"
-        "Navigation / control:\n"
-        "  wait()                                    pause briefly for the UI to update\n"
-        "  terminate(status='success')               end the task — use when complete\n"
-        "  terminate(status='failure')               end the task — use when it cannot be completed\n\n"
-        "## Worked examples (your reply should look like these — every reply, even if the history has bare actions)\n"
-        "Example A — single click, with progress + next-action reasoning:\n"
-        "<observation>The screen shows a text editor application with a menu bar at the top. The File, Edit, View, and Help menus are visible. The document area below is empty and no menus are currently open. The cursor appears to be in the main document body.</observation> <reason>The history shows I haven't opened any menus yet, and the current screenshot confirms I'm at the application's main window. The File menu sits in the top-left of the toolbar, and I need it to reach 'Open Recent'. Alternatives — a keyboard shortcut like Ctrl+O — would skip the recent-files list, so the menu is the right path. After clicking I expect the File dropdown to appear, exposing 'Open Recent' as a submenu.</reason> <answer>[{'description': 'Open the File menu in the top-left of the menu bar', 'action': \"click(x=0.04, y=0.03)\"}]</answer>\n\n"
-        "Example B — keyboard shortcut, recovering from a previous misstep:\n"
-        "<observation>The screen shows a document editor with text content visible. The cursor is blinking inside the document body, indicating the editor has focus. The title bar shows the filename without a dirty indicator, but I have not yet saved the changes made in this session.</observation> <reason>The previous action clicked into the document body, which means the editor is now focused — good, that's the prerequisite for a save shortcut. The task is to save the file, and I haven't done that yet. Ctrl+S is the standard save shortcut and avoids menu navigation entirely. After pressing it I expect either a silent save (title bar dirty marker disappears) or a Save As dialog if the file is untitled.</reason> <answer>[{'description': 'Save the document with the Ctrl+S shortcut', 'action': \"hotkey(['ctrl', 's'])\"}]</answer>\n\n"
-    )
-
-    train_vlm_rl(base_prompt, args.experiment_name, args.model_config, args.trainer_config, args.rewards, args.resume_from_checkpoint, args.s3_uri)
+    try:
+        train_vlm_rl(base_prompt, args.experiment_name, args.model_config, args.trainer_config, args.rewards, args.resume_from_checkpoint, args.s3_uri, args.s3_upload_every)
+    except BaseException as e:
+        # Guard rail: on any crash (including KeyboardInterrupt/OOM kill) stop the
+        # billing on the cloud box. Latest checkpoint is already on S3, so a fresh
+        # pod can resume. Re-raise so the traceback + non-zero exit still surface.
+        print(f"[error] training aborted: {e!r}", flush=True)
+        _terminate_pod(f"training crashed ({type(e).__name__})")
+        raise

@@ -46,12 +46,27 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         --index-url "https://download.pytorch.org/whl/${TORCH_CUDA_CHANNEL}" && \
     python -m pip install -r requirements.txt
 
+# vLLM powers fast generation during GRPO/GSPO (Unsloth `fast_inference` +
+# trainer `use_vllm`). It must be present or `fast_inference=True` fails at model
+# load. vLLM pins torch tightly, so install it AFTER the cu128 torch above and
+# point its --extra-index-url at the same channel: that lets any torch dep
+# resolve to the Blackwell (sm_120) build instead of pulling a default-PyPI
+# torch over it. If pip still tries to downgrade torch, pin a vLLM release whose
+# torch matches the cu128 wheel via --build-arg VLLM_SPEC="vllm==<ver>".
+# NOTE: vLLM drags in flashinfer/xformers — on Blackwell these need cu128 wheels
+# too; verify the built image actually imports vllm on the target GPU.
+ARG VLLM_SPEC=vllm
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python -m pip install "${VLLM_SPEC}" \
+        --extra-index-url "https://download.pytorch.org/whl/${TORCH_CUDA_CHANNEL}" && \
+    python -c "import torch, importlib.metadata as m; print('torch', torch.__version__); print('vllm', m.version('vllm'))"
+
 # Pre-download the base model weights into the image's HF cache so the first
 # training run doesn't burn time pulling from the Hub. Defaults to just the 4B
 # variant to keep the image lean; override with
 # --build-arg PREFETCH_MODELS="<repo> [<repo> ...]" to pick a different one (or
 # multiple), or pass an empty string to skip prefetching entirely.
-ARG PREFETCH_MODELS="unsloth/Qwen3-VL-8B-Instruct-unsloth-bnb-4bit"
+ARG PREFETCH_MODELS="unsloth/Qwen3-VL-4B-Instruct-unsloth-bnb-4bit"
 RUN if [ -n "${PREFETCH_MODELS}" ]; then \
         for repo in ${PREFETCH_MODELS}; do \
             echo "Prefetching ${repo} into ${HF_HOME}" && \
