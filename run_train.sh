@@ -27,27 +27,53 @@ export AWS_DEFAULT_REGION
 
 EXPERIMENT_NAME="${1:?usage: ./run_train.sh <experiment_name>}"
 
-# --- Tunables (edit here; not CLI args) -------------------------------------
-MODEL_CONFIG="qwen3-vl-4b-4bit.yml"
-NUM_GENERATIONS=6        # GRPO group size. Was 4 on the limited-hw run; 6 is the
-                         # chosen value for this run (still limited-hw-defensible).
-PER_DEVICE_BS=2          # THROUGHPUT KNOB: raise until OOM, lower if generation
-                         # OOMs. Per-GPU micro-batch; peak memory scales with it.
-LR_SCALING="sqrt"        # none | sqrt | linear. sqrt recommended for AdamW.
-S3_URI="s3://omnibrowse-s3/runs"
-S3_UPLOAD_EVERY=3        # mirror to S3 every Nth checkpoint (volume is canonical).
-DATA_VOLUME="/workspace/agentnet"
+# --- Tunables (env-overridable; defaults are the production values) ---------
+# Each is `${VAR:-default}` so run_pipeline.sh (or a `docker run -e`) can feed a
+# probed PER_DEVICE_BS without editing this file. NUM_GENERATIONS/MODEL_CONFIG
+# MUST match whatever the probe measured, or the per-GPU VRAM no longer holds.
+MODEL_CONFIG="${MODEL_CONFIG:-qwen3-vl-4b-4bit.yml}"
+NUM_GENERATIONS="${NUM_GENERATIONS:-6}"  # GRPO group size. Was 4 on the limited-hw
+                         # run; 6 is the chosen value (still limited-hw-defensible).
+PER_DEVICE_BS="${PER_DEVICE_BS:-2}"      # THROUGHPUT KNOB: raise until OOM, lower if
+                         # generation OOMs. Per-GPU micro-batch; peak scales with it.
+LR_SCALING="${LR_SCALING:-sqrt}"         # none | sqrt | linear. sqrt rec. for AdamW.
+MAX_COMPLETION_LENGTH="${MAX_COMPLETION_LENGTH:-}"  # if set, clamp rollout length in
+                         # the SOURCE config before scaling (e.g. 512). Empty = leave
+                         # gspo.yml as-is. Shorter = less generation VRAM + faster
+                         # decode (HF generate gates each step on the longest seq).
+S3_URI="${S3_URI:-s3://omnibrowse-s3/runs}"
+S3_UPLOAD_EVERY="${S3_UPLOAD_EVERY:-3}"  # mirror to S3 every Nth checkpoint.
+DATA_VOLUME="${DATA_VOLUME:-/workspace/agentnet}"
+DOWNLOAD_COUNTDOWN="${DOWNLOAD_COUNTDOWN:-15}"  # grace seconds before auto-pulling
+                         # the dataset from S3 when the volume is empty (Ctrl-C /
+                         # stop the container in this window if the mount is wrong).
 TRAINER_SRC="policy/trainer/configs/gspo.yml"
 TRAINER_OUT_NAME="gspo_runpod.yml"
 TRAINER_OUT="policy/trainer/configs/${TRAINER_OUT_NAME}"
 LOCAL_DATA="dataset/agentnet/data"
 # ----------------------------------------------------------------------------
 
-# 1. Point the dataset loader (hardcoded to dataset/agentnet/data) at the volume.
+# 1. Ensure AgentNet is on the volume; auto-fill it from S3 if missing. The
+#    countdown is a deliberate escape hatch: if the volume mount is wrong we'd
+#    otherwise download the whole set into the wrong place (or ephemeral disk),
+#    so we pause and let you Ctrl-C / stop the container first.
 if [ ! -e "${DATA_VOLUME}/agentnet_ubuntu_5k.jsonl" ]; then
-  echo "ERROR: AgentNet not found on the volume at ${DATA_VOLUME} (expected" \
-       "agentnet_ubuntu_5k.jsonl). Fill it first with prep_volume_s3.py." >&2
-  exit 1
+  echo "[data] AgentNet NOT found on the volume at ${DATA_VOLUME}" \
+       "(expected agentnet_ubuntu_5k.jsonl)." >&2
+  echo "[data] Will DOWNLOAD the full dataset from S3 into ${DATA_VOLUME}." >&2
+  echo "[data] If that path is wrong, STOP the container now." >&2
+  for ((s = DOWNLOAD_COUNTDOWN; s > 0; s--)); do
+    printf "\r[data] starting download in %2ds ... (Ctrl-C to abort) " "${s}" >&2
+    sleep 1
+  done
+  printf "\r[data] starting download now.%40s\n" "" >&2
+  DEST_DIR="${DATA_VOLUME}" python prep_volume_s3.py
+  if [ ! -e "${DATA_VOLUME}/agentnet_ubuntu_5k.jsonl" ]; then
+    echo "ERROR: download finished but ${DATA_VOLUME}/agentnet_ubuntu_5k.jsonl is" \
+         "still missing. Check S3_URI / AWS credentials and the bucket layout." >&2
+    exit 1
+  fi
+  echo "[data] download complete." >&2
 fi
 if [ -L "${LOCAL_DATA}" ] || [ ! -e "${LOCAL_DATA}" ]; then
   ln -sfn "${DATA_VOLUME}" "${LOCAL_DATA}"
@@ -68,6 +94,14 @@ if [ "${NUM_GPUS}" -lt 1 ]; then
 fi
 echo "[gpus] detected ${NUM_GPUS} GPU(s)"
 
+# 2b. Optional: clamp the rollout length in the SOURCE config before scaling.
+#     scale_trainer_config.py copies max_completion_length through verbatim, so
+#     editing it here flows straight into the generated runpod config.
+if [ -n "${MAX_COMPLETION_LENGTH}" ]; then
+  sed -i "s/^max_completion_length:.*/max_completion_length: ${MAX_COMPLETION_LENGTH}/" "${TRAINER_SRC}"
+  echo "[config] $(grep '^max_completion_length' "${TRAINER_SRC}")"
+fi
+
 # 3. Generate the GPU-count-scaled trainer config. --auto-grad-accum guarantees a
 #    TRL-legal global batch for whatever GPU count we just found.
 python scale_trainer_config.py \
@@ -80,9 +114,10 @@ python scale_trainer_config.py \
   --lr-scaling "${LR_SCALING}"
 
 # 4. Launch multi-GPU training. accelerate sets LOCAL_RANK/WORLD_SIZE; one process
-#    per GPU, each with its own colocated vLLM engine (vllm_mode: colocate). bf16
-#    is driven by the trainer config (bf16: true), not an accelerate flag, to
-#    avoid a double mixed-precision config.
+#    per GPU. Rollouts use TRL's native HF generation (use_vllm: false) in the same
+#    process, so there's no separate inference engine. bf16 is driven by the trainer
+#    config (bf16: true), not an accelerate flag, to avoid a double mixed-precision
+#    config.
 accelerate launch \
   --num_processes "${NUM_GPUS}" \
   --num_machines 1 \
