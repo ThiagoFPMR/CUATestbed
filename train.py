@@ -27,6 +27,32 @@ from prompts import base_prompt
 os.environ.setdefault("WANDB_PROJECT", "omnibrowse")
 
 
+# --- Multi-GPU (DDP) compatibility shim for Unsloth's compiled GRPO trainer ---
+# Under `accelerate launch` with >1 GPU the model is wrapped in
+# DistributedDataParallel. Unsloth's compiled UnslothGRPOTrainer.compute_loss
+# reads `model.config` (for the logit-softcapping check) directly on that wrapper,
+# but DDP doesn't forward attribute access to the module it wraps, raising:
+#   AttributeError: 'DistributedDataParallel' object has no attribute 'config'
+# at the first loss step (generation runs fine; the crash is in compute_loss).
+# Delegate unknown attribute lookups on a DDP instance to the wrapped .module so
+# `ddp.config` transparently resolves to `ddp.module.config`. No-op on 1 GPU
+# (there's no DDP wrapper). `.module` itself resolves via nn.Module.__getattr__'s
+# _modules lookup, so this does not recurse.
+from torch.nn.parallel import DistributedDataParallel as _DDP
+
+_ddp_base_getattr = _DDP.__getattr__
+
+
+def _ddp_attr_proxy(self, name):
+    try:
+        return _ddp_base_getattr(self, name)
+    except AttributeError:
+        return getattr(self.module, name)
+
+
+_DDP.__getattr__ = _ddp_attr_proxy
+
+
 def _resolve_resume_checkpoint(
         resume: bool | str,
         experiment_name: str,
