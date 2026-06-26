@@ -2,18 +2,23 @@
 """
 Probe the largest per_device_train_batch_size that fits on ONE GPU.
 
-Runs a few *real* GRPO training steps (vLLM generation + forward/backward +
-optimizer step) on the real model + AgentNet data + system prompt, at a single
+Runs a few *real* GRPO training steps (HF in-process generation + forward/backward
++ optimizer step) on the real model + AgentNet data + system prompt, at a single
 candidate per_device_bs, and reports FIT / OOM. Because the stack is plain DDP
-(no FSDP/ZeRO sharding) with a per-process colocate vLLM engine, per-GPU memory
-is the same on 1 GPU as on N of the SAME card -- so the answer found here
-transfers to a bigger pod of the same SKU. See probe_sweep.sh for the driver
-that sweeps candidates in fresh processes.
+(no FSDP/ZeRO sharding), per-GPU memory is the same on 1 GPU as on N of the SAME
+card -- so the answer found here transfers to a bigger pod of the same SKU. See
+probe_sweep.sh for the driver that sweeps candidates in fresh processes.
+
+NOTE: vLLM was dropped, so generation runs via HF `.generate()` *inside* the torch
+allocator, not a separate colocate engine. Generation KV/activations are therefore
+part of the measured torch peak and scale with
+num_generations * per_device_bs * max_completion_length -- so num_generations and
+the trainer's max_completion_length now move the OOM line directly (previously they
+were bounded by vLLM's fixed reservation).
 
 Caveats (read these or the number lies to you):
-  * Run on the EXACT GPU SKU you'll rent. gpu_memory_utilization is a *fraction*
-    and the activation budget is absolute VRAM, so a 48GB probe says nothing
-    about an 80GB card.
+  * Run on the EXACT GPU SKU you'll rent. The activation + in-torch generation
+    budget is absolute VRAM, so a 48GB probe says nothing about an 80GB card.
   * Multi-GPU adds a few hundred MB of NCCL/DDP buffers not present here, so the
     single-GPU max is slightly optimistic -- use (max - 1) on the real run.
   * Only valid while you stay on DDP. FSDP/ZeRO would shard optimizer/grads and
@@ -61,8 +66,8 @@ def main() -> int:
                    help="Trainer YAML to base settings on (default: gspo.yml).")
     p.add_argument("--num-generations", type=int, default=6,
                    help="GRPO group size to test under (default: 6, the run value). "
-                        "Generation memory is bounded by the vLLM reservation, but "
-                        "this keeps the probe faithful to the real config.")
+                        "Without vLLM, generation runs in-torch, so this directly "
+                        "drives peak memory -- probe at the real run value.")
     p.add_argument("--history-length", type=int, default=12,
                    help="load_agentnet history_length (default: 12, matches train.py).")
     p.add_argument("--max-steps", type=int, default=3,
@@ -121,7 +126,7 @@ def main() -> int:
         peak = torch.cuda.max_memory_reserved(dev)
         print(f"\n[probe] RESULT: OOM at per_device_bs={args.per_device_bs}")
         print(f"[probe]   torch peak reserved before OOM: {_gib(peak):.1f} GiB "
-              f"(+ vLLM's separate reservation). {str(e)[:120]}")
+              f"(includes in-torch generation now). {str(e)[:120]}")
         return OOM
     except Exception as e:  # noqa: BLE001 -- surface anything else as a non-OOM failure
         print(f"\n[probe] RESULT: ERROR (not OOM) at per_device_bs="
@@ -130,10 +135,10 @@ def main() -> int:
 
     peak = torch.cuda.max_memory_reserved(dev)
     # True headroom: the CUDA driver's free count includes EVERYTHING on the card
-    # (vLLM's colocate weights+KV reservation, the CUDA context, etc.), not just
-    # torch's allocator. Whatever the driver sees used that torch doesn't account
-    # for is the "non-torch" hold (mostly vLLM); add it to torch's activation peak
-    # to estimate true peak usage, and the rest is real free margin.
+    # (the CUDA context, cuDNN/NCCL workspaces, etc.), not just torch's allocator.
+    # Whatever the driver sees used that torch doesn't account for is the "non-torch"
+    # hold -- now mostly just the CUDA context (vLLM's separate reservation is gone),
+    # so it's small. Add it to torch's peak to estimate true usage; the rest is free.
     free_now, _ = torch.cuda.mem_get_info(dev)
     non_torch = max(0, total - free_now - torch.cuda.memory_reserved(dev))
     est_peak = peak + non_torch
@@ -145,7 +150,7 @@ def main() -> int:
 
     print(f"\n[probe] RESULT: FIT at per_device_bs={args.per_device_bs}")
     print(f"[probe]   torch peak reserved: {_gib(peak):.1f} GiB | "
-          f"non-torch (vLLM + ctx): {_gib(non_torch):.1f} GiB | "
+          f"non-torch (CUDA ctx): {_gib(non_torch):.1f} GiB | "
           f"est. peak usage: {_gib(est_peak):.1f} / {_gib(total):.1f} GiB")
     print(f"[probe]   estimated free margin: {_gib(margin):.1f} GiB "
           f"({100 * margin / total:.0f}% of card)")

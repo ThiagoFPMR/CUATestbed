@@ -8,6 +8,12 @@ optionally overrides `num_generations` and rescales `learning_rate`.
 `num_gpus` is a *launch-time* quantity (set by accelerate/torchrun, not the
 YAML); it's used here purely to compute and validate the resulting global batch.
 
+This is pure batch/lr arithmetic and is generation-backend-agnostic: every other
+key in the source YAML (e.g. `use_vllm`, `max_completion_length`) is copied
+through verbatim, so the scaled config inherits whatever the source sets. Pick a
+`per_device_bs` that the probe found to FIT -- with vLLM dropped the probe's peak
+now includes in-torch generation, so that number already accounts for it.
+
 TRL constraint enforced:
     global_batch = per_device_bs * num_gpus * grad_accum
     must be divisible by num_generations.

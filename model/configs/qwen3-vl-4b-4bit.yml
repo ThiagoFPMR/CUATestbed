@@ -8,7 +8,7 @@ quantization:
   fp_precision: 4 # 4bit QLoRA, 8bit LoRA, or 16bit LoRA
   full_finetuning: false
   qat_scheme: "none" # TODO: Look further into QAT schemes
-  use_vllm: true
+  use_vllm: false
   gpu_memory_utilization: 0.5
 
 finetuning:

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Find the largest per_device_train_batch_size that fits on ONE GPU, calling
 # probe_per_device_bs.py in a FRESH process per candidate (an OOM can leave the
-# CUDA allocator / colocate vLLM engine in a poisoned state, so reusing a process
-# would corrupt later trials).
+# CUDA allocator in a poisoned state, so reusing a process would corrupt later
+# trials).
 #
 # Two modes (fitness is monotone: if N fits, N-1 fits):
 #
@@ -85,7 +85,8 @@ if [ "${last_ok}" -eq 0 ]; then
   else
     echo "[sweep] nothing fit (even per_device_bs=${START} failed). Lower START,"
   fi
-  echo "        drop num_generations, or raise gpu_memory_utilization headroom."
+  echo "        or drop num_generations / max_completion_length (both now drive"
+  echo "        in-torch generation memory)."
 else
   rec=$(( last_ok > 1 ? last_ok - 1 : last_ok ))
   echo "[sweep] largest per_device_bs that FIT on this GPU: ${last_ok}"

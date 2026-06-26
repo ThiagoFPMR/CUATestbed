@@ -8,7 +8,7 @@ quantization:
   fp_precision: 4 # 4bit QLoRA, 8bit LoRA, or 16bit LoRA
   full_finetuning: false
   qat_scheme: "none" # TODO: Look further into QAT schemes
-  use_vllm: true
+  use_vllm: false
   gpu_memory_utilization: 0.5 # Only with vLLM. Colocate mode: fraction vLLM grabs
     # for weights + KV cache; the rest must hold the trainable model, grads,
     # optimizer state and activations. 0.5 is a safe start on big cards — raise

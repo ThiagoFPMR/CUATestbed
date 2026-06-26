@@ -2,6 +2,13 @@
 # CUDA 12.8 is the floor for NVIDIA Blackwell (B100/B200, RTX 50xx; sm_100/sm_120).
 # The cu128 toolchain + torch wheels below also cover Ampere/Hopper, so one image
 # runs on both old and new GPUs.
+#
+# This image is vLLM-free by design: GRPO/GSPO rollouts use TRL's native HF
+# generation (model/trainer configs set use_vllm=false). vLLM 0.10.2 has no native
+# Qwen3-VL impl (its Transformers-backend bnb loader can't read unsloth's pre-packed
+# nf4 checkpoint), and newer vLLM drags transformers>5.5 which unsloth rejects — so
+# it was pure cost here. Re-enabling means: pip install vllm==0.10.2, patch its
+# transformers_utils/configs to be dataclass-safe, and flip use_vllm back on.
 FROM nvidia/cuda:12.8.1-devel-ubuntu22.04
 
 # Everything the image bakes lives under /opt, NOT /workspace: RunPod (and most
@@ -37,46 +44,37 @@ RUN --mount=type=ssh \
 
 WORKDIR /opt/OmniBrowse
 
-# unsloth pulls a CUDA build of torch plus transformers, trl, peft, datasets,
-# bitsandbytes and accelerate. torch wheels bundle their own CUDA/cuDNN runtime.
-# The pip cache mount keeps rebuilds fast even when the clone layer is busted.
+# Dependency install. Order matters: install torch FIRST, pinned, from the cu128
+# wheel index so it carries Blackwell (sm_120) kernels; the unsloth install then
+# sees torch already satisfied and won't pull a non-Blackwell build over it.
+# Override TORCH_CUDA_CHANNEL to retarget the index. The pip cache mount keeps
+# rebuilds fast even when the clone layer is busted.
 #
-# Install torch FIRST, pinned, from the cu128 wheel index so it carries Blackwell
-# (sm_120) kernels. cu128 is unsloth's tested Blackwell channel, and torch 2.8.0
-# is exactly what vLLM 0.10.2 (pinned below) requires — pinning it here avoids an
-# install-then-downgrade churn and keeps the whole stack on one CUDA minor.
-# Override TORCH_CUDA_CHANNEL to retarget the index.
+# Explicit pins (requirements.txt only lists `unsloth` unpinned; without these the
+# resolver drifts up to transformers 5.x and breaks Qwen3-VL loading):
+#   torch==2.8.0          - Blackwell-capable cu128 wheel, kept deterministic.
+#   transformers==4.57.6  - >=4.57.0 for Qwen3-VL support; <5.0 to avoid the 5.x
+#                           dataclass config refactor (and its Qwen3-VL load bug).
+#   unsloth==2026.6.9     - the verified-working release.
 ARG TORCH_CUDA_CHANNEL=cu128
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install --upgrade pip setuptools wheel && \
     python -m pip install torch==2.8.0 torchvision==0.23.0 \
         --index-url "https://download.pytorch.org/whl/${TORCH_CUDA_CHANNEL}" && \
-    python -m pip install -r requirements.txt
-
-# vLLM powers fast generation during GRPO/GSPO (Unsloth `fast_inference` +
-# trainer `use_vllm`). CRITICAL: do NOT chase the latest vLLM. We pin vLLM 0.10.2,
-# the version unsloth tests on Blackwell (cu128), because it's the one coherent
-# point in this stack. Newer vLLM (0.23) drags in transformers>5.5 (which unsloth
-# rejects and which triggers a trl guard bug), forces pydantic>=2.12, and removes
-# `vllm.sampling_params.GuidedDecodingParams` that trl 0.24 imports — none of
-# which a Blackwell-capable wheel resolves. 0.10.2 keeps GuidedDecodingParams and
-# stays on cu128 / torch 2.8.0. We also cap transformers to unsloth's supported
-# <=5.5.0 so the vLLM install can't pull it back up. NOTE: drags in xformers.
-ARG VLLM_SPEC="vllm==0.10.2"
-RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install "${VLLM_SPEC}" "transformers>=4.51.3,<=5.5.0" \
-        --extra-index-url "https://download.pytorch.org/whl/${TORCH_CUDA_CHANNEL}" && \
-    python -c "import torch; print('torch', torch.__version__)" && \
-    python -c "import vllm; print('vllm', vllm.__version__)"  # real import: fails the build on a CUDA-mismatched wheel
+    python -m pip install -r requirements.txt \
+        "transformers==4.57.6" "unsloth==2026.6.9" && \
+    python -c "import torch; print('torch', torch.__version__)"
 
 # Fix a trl 0.24.0 x transformers incompatibility. transformers'
 # _is_package_available returns a (bool, version) tuple even when
 # return_version=False; trl assigns that raw tuple to its `_<pkg>_available`
 # flags (vllm_ascend, llm_blender, mergekit, ...), so every `if is_X_available():`
 # guard is always-truthy and trl tries to import absent optional deps, crashing
-# the import of GRPOTrainer. Shim the function so the default yields a plain bool.
-# The assert makes the build fail loudly if trl's file layout ever changes.
-RUN python3 <<'PY'
+# the import of GRPOTrainer. With vLLM removed this shim is load-bearing: it's what
+# makes trl's is_vllm_available() return a clean False instead of sending trl into
+# `from vllm import LLM`. Shim the function so the default yields a plain bool; the
+# assert makes the build fail loudly if trl's file layout ever changes.
+RUN python <<'PY'
 p = "/usr/local/lib/python3.12/dist-packages/trl/import_utils.py"
 src = open(p).read()
 anchor = "from transformers.utils.import_utils import _is_package_available\n"
@@ -91,11 +89,12 @@ open(p, "w").write(src.replace(anchor, shim, 1))
 print("trl guard shim applied")
 PY
 
-# Build-time gate: import the whole training stack so any version regression fails
-# HERE instead of on a rented GPU. Covers the three things that broke before:
-# unsloth (transformers cap), trl's GRPO trainer (guard shim), and vLLM's
-# GuidedDecodingParams symbol (vLLM pin). No GPU needed for the import path.
-RUN python3 -c "import unsloth; from trl import GRPOTrainer, GRPOConfig; from vllm.sampling_params import GuidedDecodingParams; print('training stack import OK')"
+# Build-time gate (GPU-FREE): docker build has no accelerator and unsloth's import
+# hard-raises without one, so we can't import the full stack here. We can still
+# cheaply confirm the trl guard shim landed. The full unsloth + trl-GRPO import is
+# exercised at runtime by the probe on the GPU pod (or `docker run --gpus all`).
+RUN grep -q "__trl_raw_ipa" /usr/local/lib/python3.12/dist-packages/trl/import_utils.py \
+ && echo "trl guard shim present"
 
 # Pre-download the base model weights into the image's HF cache so the first
 # training run doesn't burn time pulling from the Hub. Defaults to just the 4B
