@@ -14,7 +14,7 @@ eval "$(ssh-agent -s)" && ssh-add ~/.ssh/id_ed25519
 docker build --ssh default -t omnibrowse:latest .
 WANDB_API_KEY=... AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
 docker run --gpus all -it --rm \
-  -v omnibrowse-agentnet:/workspace/OmniBrowse/dataset/agentnet/data \
+  -v omnibrowse-agentnet:/opt/OmniBrowse/dataset/agentnet/data \
   -e WANDB_API_KEY -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY \
   -e AWS_DEFAULT_REGION \
   omnibrowse:latest ./run_train.sh
