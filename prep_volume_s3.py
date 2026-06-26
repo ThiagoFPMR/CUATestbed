@@ -114,7 +114,15 @@ def download_from_s3() -> None:
     print(f"[cfg] DEST={DEST_DIR}  SRC=s3://{bucket}/{prefix}  WORKERS={S3_WORKERS}",
           flush=True)
 
-    s3 = boto3.client("s3")
+    # boto3's default connection pool is 10, so without this the S3_WORKERS
+    # threads below would serialize down to ~10-way concurrency -- the real cap on
+    # a latency-bound pile of tiny PNGs. Size the pool to the worker count, and use
+    # adaptive retries so cranking workers up doesn't trip S3 request throttling.
+    from botocore.config import Config
+    s3 = boto3.client("s3", config=Config(
+        max_pool_connections=max(S3_WORKERS, 10),
+        retries={"max_attempts": 10, "mode": "adaptive"},
+    ))
     paginator = s3.get_paginator("list_objects_v2")
     objects: list[tuple[str, int, str]] = []
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix + "/"):
