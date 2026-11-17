@@ -18,10 +18,12 @@ same mapping download.py --full-s3 uses for a local checkout). Keys ending in
 .tar are extracted in place (so an agentnet-reduced prefix of tars works too);
 everything else lands as a loose file.
 
-Idempotent: a same-size local file is treated as complete and skipped, so an
-interrupted/retried run no-ops what is already on the volume. For .tar keys a
-per-set sentinel on DEST_DIR is the source of truth (the tar is deleted
-post-extract).
+Idempotent: an already-present local file is skipped when it matches the S3
+object, so an interrupted/retried run no-ops what is already on the volume. The
+match test defaults to a checksum (local MD5 vs the object's ETag) and falls back
+to byte size when the ETag isn't a usable whole-file hash (multipart uploads) or
+when VERIFY=size is set. For .tar keys a per-set sentinel on DEST_DIR is the
+source of truth (the tar is deleted post-extract).
 
 Env vars:
   DEST_DIR     extracted data target = the mounted volume.
@@ -31,6 +33,9 @@ Env vars:
   S3_WORKERS   parallel transfers. The full set is hundreds of thousands of tiny
                PNGs, so this is latency-bound -- a wide pool of single-threaded
                GETs beats a few multi-threaded ones. default: 64
+  VERIFY       skip criterion for already-present files: "checksum" (default,
+               local MD5 vs S3 ETag) or "size" (byte size only; faster resume
+               scan, no per-file re-read, but misses same-size corruption).
   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_DEFAULT_REGION
                boto3 credentials. Pass as pod env vars / RunPod secrets -- never
                bake them into the image.
@@ -43,6 +48,7 @@ Env vars:
                by RunPod automatically. The network volume survives termination,
                so resume state for completed files is preserved.
 """
+import hashlib
 import os
 import sys
 import tarfile
@@ -53,6 +59,7 @@ from pathlib import Path
 DEST_DIR = Path(os.environ.get("DEST_DIR", "/workspace/agentnet"))
 S3_URI = os.environ.get("S3_URI", "s3://omnibrowse-s3/datasets/agentnet-full")
 S3_WORKERS = int(os.environ.get("S3_WORKERS", "64"))
+VERIFY_CHECKSUM = os.environ.get("VERIFY", "checksum").lower() != "size"
 
 
 def _parse_s3_uri(uri: str) -> tuple[str, str]:
@@ -66,6 +73,35 @@ def _sentinel(name: str) -> Path:
     return DEST_DIR / f".{name}.extracted"
 
 
+def _etag_md5(etag: str) -> str | None:
+    """
+    The MD5 hex an S3 ETag encodes, or None if it isn't a usable file hash.
+    """
+    etag = etag.strip('"')
+    if "-" in etag or len(etag) != 32:
+        return None
+    return etag.lower()
+
+
+def _md5(path: Path, _buf: int = 1 << 20) -> str:
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(_buf), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _loose_is_complete(dest: Path, size: int, etag: str) -> bool:
+    """
+    Whether the local file is already a complete copy of the S3 object.
+    """
+    if VERIFY_CHECKSUM:
+        want = _etag_md5(etag)
+        if want is not None:
+            return _md5(dest) == want
+    return dest.stat().st_size == size
+
+
 def _loose_transfer_config():
     # Tiny objects: per-file threading buys nothing and would explode the thread
     # count under the outer pool. Transfer each file single-threaded and get
@@ -74,7 +110,7 @@ def _loose_transfer_config():
     return TransferConfig(use_threads=False)
 
 
-def _fetch_one(s3, bucket: str, key: str, size: int, rel: str) -> None:
+def _fetch_one(s3, bucket: str, key: str, size: int, etag: str, rel: str) -> None:
     """Download a single key to DEST_DIR/<rel>, extracting if it's a .tar."""
     dest = DEST_DIR / rel
 
@@ -99,8 +135,9 @@ def _fetch_one(s3, bucket: str, key: str, size: int, rel: str) -> None:
         _sentinel(img_set).touch()
         return
 
-    # Loose file. Resume/idempotency: a same-size local file is assumed complete.
-    if dest.exists() and dest.stat().st_size == size:
+    # Loose file. Resume/idempotency: skip a local file that already matches the
+    # S3 object (by MD5 when checksumming, else by size -- see _loose_is_complete).
+    if dest.exists() and _loose_is_complete(dest, size, etag):
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     s3.download_file(bucket, key, str(dest), Config=_loose_transfer_config())
@@ -124,14 +161,14 @@ def download_from_s3() -> None:
         retries={"max_attempts": 10, "mode": "adaptive"},
     ))
     paginator = s3.get_paginator("list_objects_v2")
-    objects: list[tuple[str, int, str]] = []
+    objects: list[tuple[str, int, str, str]] = []
     for page in paginator.paginate(Bucket=bucket, Prefix=prefix + "/"):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             rel = key[len(prefix) + 1:]
             if not rel:  # the prefix "directory" placeholder, if any
                 continue
-            objects.append((key, obj["Size"], rel))
+            objects.append((key, obj["Size"], obj["ETag"], rel))
 
     if not objects:
         raise RuntimeError(
@@ -144,16 +181,16 @@ def download_from_s3() -> None:
     done = 0
     lock = threading.Lock()
 
-    def _task(key: str, size: int, rel: str) -> None:
+    def _task(key: str, size: int, etag: str, rel: str) -> None:
         nonlocal done
-        _fetch_one(s3, bucket, key, size, rel)
+        _fetch_one(s3, bucket, key, size, etag, rel)
         with lock:
             done += 1
             if done % 2000 == 0 or done == total:
                 print(f"[dl] {done}/{total}", flush=True)
 
     with ThreadPoolExecutor(max_workers=S3_WORKERS) as ex:
-        futures = [ex.submit(_task, k, sz, rel) for k, sz, rel in objects]
+        futures = [ex.submit(_task, k, sz, et, rel) for k, sz, et, rel in objects]
         for fut in as_completed(futures):
             fut.result()
 

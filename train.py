@@ -24,8 +24,11 @@ from transformers.trainer_utils import get_last_checkpoint
 from dataset.agentnet.agentnet import load_agentnet
 from prompts import base_prompt
 
-os.environ.setdefault("WANDB_PROJECT", "omnibrowse")
+os.environ.setdefault("WANDB_PROJECT", "cuatestbed")
 
+import peft.utils.save_and_load as _peft_save_and_load
+
+_peft_save_and_load._maybe_shard_state_dict_for_tp = lambda *args, **kwargs: None
 
 # --- Multi-GPU (DDP) compatibility shim for Unsloth's compiled GRPO trainer ---
 # Under `accelerate launch` with >1 GPU the model is wrapped in
@@ -151,6 +154,7 @@ def train_vlm_rl(
         resume_from_checkpoint: bool | str = False,
         s3_uri: str | None = None,
         s3_upload_every: int = 10,
+        keep_all_checkpoints: bool = False,
 ) -> None:
     """
     Train a vision-language model using reinforcement learning.
@@ -162,6 +166,7 @@ def train_vlm_rl(
         output_dir (str): Directory to save the trained model.
         s3_uri (str | None): If set (e.g. s3://bucket/prefix), mirror checkpoints and final artifacts to S3.
         s3_upload_every (int): Push to S3 only every Nth checkpoint save (default 1). Local saves are unaffected; use >1 to lower the S3 backup cadence when checkpoints already persist on a network volume.
+        keep_all_checkpoints (bool): If True, retain every checkpoint saved at the configured save_steps cadence instead of pruning down to the exponentially-spaced retention set.
     """
     torch.cuda.empty_cache()
     model, tokenizer = load_model_from_file(model_config)
@@ -183,7 +188,9 @@ def train_vlm_rl(
     trainer.callback_handler.callbacks.append(
         GenerationLoggingCallback(pred_action_every=10, full_output_every=60)
     )
-    trainer.callback_handler.callbacks.append(CheckpointRetentionCallback(n_ckpts=10))
+    trainer.callback_handler.callbacks.append(
+        CheckpointRetentionCallback(n_ckpts=10, keep_all=keep_all_checkpoints)
+    )
 
     s3_callback = None
     if s3_uri:
@@ -242,10 +249,11 @@ if __name__ == "__main__":
     parser.add_argument("--resume_from_checkpoint", nargs="?", const=True, default=False, help="Resume training. Pass with no value to auto-detect the latest checkpoint (preferring a local one, else the latest on S3 if --s3_uri is set). Pass a local path, or a 'checkpoint-N' name / step to fetch that specific checkpoint from S3 when it isn't on local disk.")
     parser.add_argument("--s3_uri", type=str, required=False, default=None, help="If set (e.g. s3://bucket/prefix), mirror checkpoints and the final artifacts to S3. For cloud boxes with ephemeral local storage.")
     parser.add_argument("--s3_upload_every", type=int, required=False, default=1, help="Mirror to S3 only every Nth checkpoint save (default 1 = every save). Local checkpoints are always written; raise this to lower the S3 backup cadence when checkpoints persist on a network volume. Each S3 sync also includes the generation_logs.")
+    parser.add_argument("--keep_all_checkpoints", action="store_true", help="Keep every checkpoint saved at the configured save_steps cadence, disabling the exponentially-spaced retention pruning (CheckpointRetentionCallback).")
     args = parser.parse_args()
 
     try:
-        train_vlm_rl(base_prompt, args.experiment_name, args.model_config, args.trainer_config, args.rewards, args.resume_from_checkpoint, args.s3_uri, args.s3_upload_every)
+        train_vlm_rl(base_prompt, args.experiment_name, args.model_config, args.trainer_config, args.rewards, args.resume_from_checkpoint, args.s3_uri, args.s3_upload_every, args.keep_all_checkpoints)
     except BaseException as e:
         # Guard rail: on any crash (including KeyboardInterrupt/OOM kill) stop the
         # billing on the cloud box. Latest checkpoint is already on S3, so a fresh

@@ -152,12 +152,14 @@ class CheckpointRetentionCallback(TrainerCallback):
     CHECKPOINT_RE = re.compile(r"^checkpoint-(\d+)$")
     STATE_FILENAME = "retention_state.json"
 
-    def __init__(self, n_ckpts: int = 10, metric_key: str = "reward"):
+    def __init__(self, n_ckpts: int = 10, metric_key: str = "reward",
+                 keep_all: bool = False):
         self.n_ckpts = n_ckpts
         self.counter = 0
         self.buckets: list[int | None] = [None] * n_ckpts
         self.latest: int | None = None
         self.metric_key = metric_key
+        self.keep_all = keep_all
         self._best_step: int | None = None
         self._best_value = float("-inf")
         self._last_metric: float | None = None
@@ -242,18 +244,19 @@ class CheckpointRetentionCallback(TrainerCallback):
             self._best_value = self._last_metric
             self._best_step = self.latest
 
-        keep_steps = {self.latest}
-        keep_steps.update(s for s in self.buckets if s is not None)
-        if self._best_step is not None:
-            keep_steps.add(self._best_step)
+        if not self.keep_all:
+            keep_steps = {self.latest}
+            keep_steps.update(s for s in self.buckets if s is not None)
+            if self._best_step is not None:
+                keep_steps.add(self._best_step)
 
-        for name in os.listdir(args.output_dir):
-            m = self.CHECKPOINT_RE.match(name)
-            if not m:
-                continue
-            step = int(m.group(1))
-            if step not in keep_steps:
-                shutil.rmtree(os.path.join(args.output_dir, name), ignore_errors=True)
+            for name in os.listdir(args.output_dir):
+                m = self.CHECKPOINT_RE.match(name)
+                if not m:
+                    continue
+                step = int(m.group(1))
+                if step not in keep_steps:
+                    shutil.rmtree(os.path.join(args.output_dir, name), ignore_errors=True)
 
         # Persist the post-save state into the surviving latest checkpoint so a
         # resume can restore it (HF doesn't serialize callback attributes).
