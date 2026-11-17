@@ -164,6 +164,6 @@ python merge.py --run qwen3-4b-agentnet --checkpoint latest   # LoRA → full HF
 
 ## Acknowledgements
 
-Part of the compute used was provided by the Model2AI lab (DCA/UFRN). 
+Part of the compute used in testing was provided by the Model2AI lab (DCA/UFRN). 
 
 The reward design follows GUI-R1 and UI-R1, the data and action space come from OpenCUA/AgentNet, and the base models are Qwen3-VL.
