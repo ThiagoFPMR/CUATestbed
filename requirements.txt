@@ -1,6 +1,8 @@
 unsloth
 safetensors
-mergekit
 seaborn
 matplotlib
 numpy
+boto3
+wandb
+hf_transfer

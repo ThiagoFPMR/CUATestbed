@@ -7,23 +7,34 @@ from .format_rewards import *
 from typing import Callable
 
 
-def gui_r1_reward_func(completions, labels, image_sizes, **kwargs):
-    """
-    Combined reward from GUI-R1 paper that incorporates both formatting and accuracy rewards.
-    """
-    # GRPO trainer passes a list of message lists (e.g. [[{"role": "assistant", "content": "..."}]])
-    # Extract the strings to feed to our unified reward functions
+# GUI-R1 paper combines format (weight 0.6) and accuracy (weight 0.4). Split into two
+# pre-weighted reward funcs so the trainer sums them (preserving the original total)
+# while wandb logs each component independently.
+GUI_R1_FORMAT_WEIGHT = 0.6
+GUI_R1_ACCURACY_WEIGHT = 0.4
+
+
+def gui_r1_format_reward_func(completions, labels, image_sizes, **kwargs):
+    """Pre-weighted format component of the GUI-R1 reward."""
+    format_rewards = gui_r1_formatting_reward_func(completions)
+    return [GUI_R1_FORMAT_WEIGHT * f for f in format_rewards]
+
+
+def gui_r1_accuracy_reward_func(completions, labels, image_sizes, **kwargs):
+    """Pre-weighted accuracy component of the GUI-R1 reward."""
     if isinstance(completions[0], list):
         contents = [completion[-1]["content"] for completion in completions]
     else:
         contents = completions
+    acc_rewards = accuracy_reward_func(contents, labels, image_sizes, point_tol=8, scroll_tol=16)
+    return [GUI_R1_ACCURACY_WEIGHT * a for a in acc_rewards]
 
-    # Pass the extracted string contents directly 
-    # (Update format_rewards.py or action_rewards.py if they try to re-extract!)
-    format_rewards = gui_r1_formatting_reward_func(completions)
-    acc_rewards = accuracy_reward_func(contents, labels, image_sizes)
-    total_rewards = [0.8 * f + 0.2 * a for f, a in zip(format_rewards, acc_rewards)]
-    return total_rewards
+
+# Reward-name aliases that expand into multiple underlying funcs.
+_REWARD_GROUPS = {
+    "gui_r1": ["gui_r1_format", "gui_r1_accuracy"],
+}
+
 
 def parse_rewards(reward_names: list[str]) -> list[Callable]:
     """
@@ -37,12 +48,13 @@ def parse_rewards(reward_names: list[str]) -> list[Callable]:
     """
     reward_funcs = []
     for reward_name in reward_names:
-        try: 
-            reward_func = globals()[f"{reward_name}_reward_func"]
-            reward_funcs.append(reward_func)
-        except KeyError:
-            raise ValueError(f"🚫 Unknown reward function: {reward_name}")
-        
+        names = _REWARD_GROUPS.get(reward_name, [reward_name])
+        for name in names:
+            try:
+                reward_funcs.append(globals()[f"{name}_reward_func"])
+            except KeyError:
+                raise ValueError(f"🚫 Unknown reward function: {name}")
+
     return reward_funcs
 
 if __name__ == "__main__":

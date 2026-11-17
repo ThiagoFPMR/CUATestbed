@@ -9,7 +9,7 @@ quantization:
   full_finetuning: false
   qat_scheme: "none" # TODO: Look further into QAT schemes
   use_vllm: false
-  gpu_memory_utilization: 0.8 # Only with vLLM
+  gpu_memory_utilization: 0.5
 
 finetuning:
   finetune_vision_layers: false

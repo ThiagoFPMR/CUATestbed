@@ -1,0 +1,5 @@
+# The main Dockerfile builds entirely from a git clone — nothing is copied from
+# the build context — so ignore everything to avoid scanning/uploading the local
+# tree (the ~305 GB dataset and the cua/ virtualenv). Re-include only the few
+# files Dockerfile.dataprep COPYs from the context.
+*
